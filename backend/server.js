@@ -28,6 +28,7 @@ const reportSchema = new mongoose.Schema({
   tsekh:      { type: String, default: "" },
   alerted:    { type: Boolean, default: false },
   smsNumbers: [{ type: String }],
+  smsFailed:  [{ type: String }],
   wasEdited:  { type: Boolean, default: false },
   aiOriginal: {
     type:     { type: String },
@@ -58,41 +59,69 @@ const twilioClient = twilio(
 );
 const TWILIO_FROM = process.env.TWILIO_FROM_NUMBER;
 
+function buildAlertMessage(tsekh, severity, hazardType, reasoning) {
+  const severityLabel = {
+    low: "бага", medium: "дунд", high: "өндөр", critical: "яаралтай",
+  }[severity] || severity;
+
+  // Mongolian Cyrillic forces UCS-2 encoding, which cuts the per-segment
+  // limit from 160 chars (GSM-7) down to 70 chars. Trial Twilio accounts
+  // also cap how many segments a single message can use (error 30044 =
+  // "Trial Message Length Exceeded"). So this has to stay SHORT — aim for
+  // one segment, ~70 chars or fewer. No line breaks (each one still counts
+  // toward the character total), no filler sentences.
+  const short = `АЮУЛ: ${tsekh}. ${hazardType}. Түвшин: ${severityLabel}.`;
+
+  // Hard safety cap in case tsekh/hazardType names run long — truncate
+  // rather than let it silently blow past the trial limit again.
+  return short.length <= 70 ? short : short.slice(0, 67) + "...";
+}
+
 async function sendSmsAlerts(tsekh, severity, hazardType, reasoning) {
   const numbers = TSEKH_CONTACTS[tsekh];
   if (!numbers || numbers.length === 0) {
     console.log(`[SMS] No contacts found for цех: ${tsekh}`);
-    return [];
+    return { sent: [], failed: [] };
   }
   if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !TWILIO_FROM) {
     console.error("[SMS] Twilio env vars missing — cannot send.");
-    return [];
+    return { sent: [], failed: numbers };
   }
 
-  const severityLabel = {
-    low: "БАГА", medium: "ДУНД", high: "ӨНДӨР", critical: "⚠️ ШУУД АЮУЛТАЙ",
-  }[severity] || severity;
-
-  const message =
-    `🚨 АЮУЛЫН МЭДЭГДЭЛ\n` +
-    `Цех: ${tsekh}\n` +
-    `Аюул: ${hazardType}\n` +
-    `Түвшин: ${severityLabel}\n` +
-    `${reasoning}\n` +
-    `Ажилтны баталгаажуулсан мэдэгдэл.`;
+  const message = buildAlertMessage(tsekh, severity, hazardType, reasoning);
 
   console.log(`[SMS] Sending to ${numbers.length} number(s) for ${tsekh}...`);
   const sent = [];
+  const failed = [];
   for (const to of numbers) {
     try {
       const msg = await twilioClient.messages.create({ from: TWILIO_FROM, to, body: message });
-      console.log(`[SMS] ✅ Sent to ${to} — SID: ${msg.sid}`);
+      console.log(`[SMS] Sent to ${to} — SID: ${msg.sid} (status: ${msg.status})`);
       sent.push(to);
+
+      // Twilio only confirms it accepted the message here, not that it was
+      // delivered. Check the final status a few seconds later so a
+      // carrier-side failure (e.g. error 30044) shows up in our logs
+      // instead of silently looking like a success.
+      setTimeout(async () => {
+        try {
+          const check = await twilioClient.messages(msg.sid).fetch();
+          if (check.status === "failed" || check.status === "undelivered") {
+            console.error(`[SMS] Delivery failed for ${to} — SID: ${msg.sid}, status: ${check.status}, error: ${check.errorCode} ${check.errorMessage || ""}`);
+          } else {
+            console.log(`[SMS] Delivery confirmed for ${to} — status: ${check.status}`);
+          }
+        } catch (checkErr) {
+          console.error(`[SMS] Could not check delivery status for ${msg.sid}: ${checkErr.message}`);
+        }
+      }, 8000);
+
     } catch (err) {
-      console.error(`[SMS] ❌ Failed to send to ${to} — code: ${err.code}, message: ${err.message}`);
+      console.error(`[SMS] Failed to send to ${to} — code: ${err.code}, message: ${err.message}`);
+      failed.push(to);
     }
   }
-  return sent;
+  return { sent, failed };
 }
 
 // ─── Chimege (Mongolian Speech-to-Text) ──────────────────────────────────────
@@ -341,9 +370,12 @@ app.post("/api/confirm", async (req, res) => {
 
     const shouldAlert = isHazard && (finalSeverity === "high" || finalSeverity === "critical");
     let smsNumbers = [];
+    let smsFailed = [];
     if (shouldAlert) {
       const typeLabel = HAZARD_TYPE_MN[finalType] || finalType;
-      smsNumbers = await sendSmsAlerts(draft.tsekh, finalSeverity, typeLabel, finalReasoning);
+      const result = await sendSmsAlerts(draft.tsekh, finalSeverity, typeLabel, finalReasoning);
+      smsNumbers = result.sent;
+      smsFailed = result.failed;
     }
 
     const report = await Report.create({
@@ -359,6 +391,7 @@ app.post("/api/confirm", async (req, res) => {
       tsekh:      draft.tsekh,
       alerted:    shouldAlert,
       smsNumbers,
+      smsFailed,
       wasEdited,
       aiOriginal: { type: draft.aiResult.type, severity: draft.aiResult.severity },
     });
@@ -375,6 +408,7 @@ app.post("/api/confirm", async (req, res) => {
       tsekh: draft.tsekh,
       alerted: shouldAlert,
       smsNumbers,
+      smsFailed,
       wasEdited,
       createdAt: report.createdAt,
     });

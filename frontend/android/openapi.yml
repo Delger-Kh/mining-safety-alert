@@ -1,0 +1,1503 @@
+openapi: 3.0.0
+servers:
+  - url: https://api.chimege.com/v1.2
+    description: Сервер
+info:
+  description: |
+    # Танилцуулга
+    Энэхүү зааварт Чимэгэ Системс ХХК-с гаргасан бичвэрээс яриа руу хөрвүүлэх, ярианаас бичвэр рүү хөрвүүлэх
+    болон үүнтэй холбоотой туслах API-үүд болон Болорсофт ХХК-с гаргасан бичвэрийн алдаа шалгах, үг санал болгох болон кимо хөрвүүлэгч API-үүдийг
+    ашиглах зааврууд багтсан болно.
+
+    # Нэвтрэлт
+    Чимэгэ API ашиглахын тулд танд идэвхтэй токен хэрэгтэй бөгөөд үүнийг та бидэнтэй холбоо барин үйлчилгээний 
+    эрхээ авсны дараа [console.chimege.com](https://console.chimege.com) хаягаар орон үүсгэж авах юм.
+
+    <SecurityDefinitions />
+
+  version: 1.2.0
+  title: Чимэгэ API
+  contact:
+    name: Холбоо барих
+    email: "info@chimege.mn"
+    url: https://chimege.mn
+  x-logo:
+    url: '/v1.2/logo.png'
+    altText: Chimege Systems LLC
+tags:
+  - name: transcribe
+    x-displayName: Ярианаас бичвэр рүү хөрвүүлэх
+    description: |
+      Монгол хэл дээрх яриаг бичвэр рүү хөрвүүлнэ.
+      Хөрвөсөн бичвэрт цэг, таслал автоматаар тавих боломжтой.
+      Танилтын хувьд монгол яриаг 97%-н нарийвчлалтай танина.
+
+      **Онцлох зүйлс:**
+        * Аялга заавал цэвэр байх албагүй.
+        * Багахан шуугиан нөлөөлөхгүй.
+        * Түгээмэл хэлэгддэг гадаад үгсийг танина. (Вэбээр туршин ямар үгс таньж байгааг тодруулна уу)
+
+      [Вэбээр турших](https://writer.chimege.com)
+
+  - name: synthesize
+    x-displayName: Бичвэрээс яриа руу хөрвүүлэх
+    description: |
+      Бичвэрийг эрэгтэй болон эмэгтэй хоолойгоор уншиж өгнө.
+
+      [Вэбээр турших](https://reader.chimege.com)
+
+  - name: stt-long
+    x-displayName: Урт хугацааны яриаг бичвэр рүү хөрвүүлэх
+    description: |
+      Үүнийг ашиглан хэдэн ч цагийн яриаг бичвэр рүү хөрвүүлэх боломжтой.
+      
+      Хөрвүүлэлтийн чанар болон онцлогууд энгийн ярианаас бичвэр рүү хөрвүүлэх endpoint-той ижилхэн тул энгийн аудио хөрвүүлэх хэсгээс онцлог болон чанарыг харна уу.
+      
+      [Вэбээр турших](https://writer.chimege.com)
+
+  - name: stt-long-hq
+    x-displayName: Урт хугацааны яриаг бичвэр рүү хөрвүүлэх (Өндөр чанартай)
+    description: |
+      Үүнийг ашиглан хэдэн ч цагийн яриаг бичвэр рүү хөрвүүлэх боломжтой.
+      
+      Хөрвүүлэлтийн чанар болон онцлогууд энгийн ярианаас бичвэр рүү хөрвүүлэх endpoint-той ижилхэн тул энгийн аудио хөрвүүлэх хэсгээс онцлог болон чанарыг харна уу.
+      
+      [Вэбээр турших](https://writer.chimege.com)
+
+  - name: spell-check
+    x-displayName: Бичвэрийн алдаа шалгах
+    description: |
+      Бичвэрийн алдааг шалгаж алдаатай бичсэн үгсийн жагсаалтыг гаргаж өгнө.
+
+  - name: spell-suggest
+    x-displayName: Үг санал болгох
+    description: |
+      Алдаатай үгтэй ойролцоо үгсийн жагсаалт гаргаж өгнө.
+
+  - name: kimo
+    x-displayName: Кимо хөрвүүлэгч
+    description: |
+      Монгол бичгээс кирилл рүү кириллээс монгол бичигт хөрвүүлэх API
+  
+paths:
+  /transcribe:
+    post: 
+      parameters:
+        - name: token
+          in: header
+          description: "Таны API ашиглах токен"
+          required: false
+          schema:
+            type: string
+        - name: punctuate
+          in: header
+          description: "Хөрвөсөн бичвэрт цэг, таслал тавьж форматлах эсэх"
+          required: false
+          schema:
+            type: boolean
+            default: "false"
+      tags:
+        - transcribe
+      summary: Яриаг бичвэр рүү хөрвүүлэх
+      description: Яриаг бичвэр рүү хөрвүүлнэ. Хөрвөсөн бичвэр зөвхөн кирилл жижиг үсэг болон зай агуулсан байна. `Punctuate` параметр ашиглан бичвэрийг форматлах боломжтой. 
+      operationId: transcribe
+      requestBody:
+        description: Хөрвүүлэх аудио
+        content:
+          application/octet-stream: 
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Амжилттай
+          content:
+            text/plain: 
+              schema:
+                type: string
+                description: Хөрвөсөн бичвэр
+        '400':
+          description: Оролтын аудиотой холбоотой алдаа
+          headers:
+            Error-Code: 
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 2000 - Error at receiving audio data. Please check your connection speed and audio data.
+                * 2001 - Audio file is too large. Allowed maximum file size is 3MB. Please sample down your audio. 
+                * 2002 - Audio file is too small. Minimum file size is 50KB for wav, 2KB for others.
+                * 2003 - Audio is too short. Minimum duration is 0.5s.
+                * 2004 - Invalid audio encoding. Please check your audio data encoding. Valid format is WAV.
+                * 2005 - Failed to convert audio to WAV. Please check your audio data.
+        '403':
+          description: Токентой холбоотой алдаа
+          headers:
+            Error-Code: 
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 1000 - Invalid API token.
+                * 1001 - API token is missing.
+                * 1002 - Inactive API token.
+                * 1003 - Suspended API token.
+        '500':
+          description: Таамаглаагүй алдаа гарсан
+        '503':
+          description: Серверийн ачаалал хэтэрсэн
+      x-codeSamples:
+        - lang: 'Python'
+          source: |
+            import requests
+
+            def transcribe(filename):
+                with open(filename, 'rb') as f:
+                    audio = f.read()
+
+                r = requests.post("https://api.chimege.com/v1.2/transcribe", data=audio, headers={
+                    'Content-Type': 'application/octet-stream',
+                    'Punctuate': 'true',
+                    'Token': 'API_TOKEN',
+                })
+
+                return r.content.decode("utf-8")
+
+            print(transcribe('input.wav'))
+        - lang: 'Go'
+          source: |
+            package main
+
+            import (
+              "bytes"
+              "io/ioutil"
+              "log"
+              "net/http"
+            )
+
+            func main() {
+              data, _ := ioutil.ReadFile("input.wav")
+
+              req, _ := http.NewRequest(
+                "POST", 
+                "https://api.chimege.com/v1.2/transcribe", 
+                bytes.NewBuffer(data))
+
+              req.Header.Set("Content-Type", "application/octet-stream")
+              req.Header.Set("punctuate", "true")
+              req.Header.Set("token", "API_TOKEN")
+
+              client := &http.Client{}
+
+              resp, _ := client.Do(req)
+              if err != nil {
+                log.Fatal(err)
+              }
+              defer resp.Body.Close()
+
+              body, _ := ioutil.ReadAll(resp.Body)
+
+              transcription := string(body)
+              log.Println(transcription)
+            }
+  /synthesize:
+    post:
+      parameters:
+        - name: token
+          in: header
+          description: "Таны API ашиглах токен"
+          required: false
+          schema:
+            type: string
+        - name: voice-id
+          in: header
+          description: |
+            Уншуулах хоолой. Нийт 6 төрлийн эмэгтэй хоолой, 5 төрлийн эрэгтэй хоолойгоор уншуулах боломжтой.
+          required: false
+          schema:
+            type: string
+            default: FEMALE3v2
+            enum: 
+              - FEMALE1
+              - FEMALE1v2
+              - FEMALE2v2
+              - FEMALE3v2
+              - FEMALE4v2
+              - FEMALE5v2
+              - MALE1
+              - MALE1v2
+              - MALE2v2
+              - MALE3v2
+              - MALE4v2
+        - name: speed
+          in: header
+          description: |
+            Унших хурд. `1` бол хэвийн хурдаар унших ба үүнийг ихэсгэж, багасгаснаар хурд өөрчлөгдөнө. 
+            Жишээ нь `2` бол 2 дахин хурдан, `0.5` бол 2 дахин удаан уншина.
+          required: false
+          schema:
+            type: number
+            default: 1
+            maximum: 4.0
+            minimum: 0.2
+        - name: pitch
+          in: header
+          description: |
+            Унших хоолойн өнгө. `1` бол хэвийн унших ба үүнийг ихэсгэж, багасгаснаар хоолойны өнгө өөрчлөгдөнө.
+          required: false
+          schema:
+            type: number
+            default: 1
+            maximum: 6.0
+            minimum: 0.2
+        - name: sample-rate
+          in: header
+          description: |
+            Аудионы `Sample rate`
+          required: false
+          schema:
+            type: number
+            default: 22050
+            enum: [8000, 16000, 22050]
+      tags:
+        - synthesize
+      summary: Бичвэрээс яриа руу хөрвүүлэх
+      description: |
+        Бичвэрийг авч аудио файл болгон хөрвүүлнэ. Хөрвөсөн аудио файлын төрөл нь `audio/x-wav` байна. <br>
+        `voice-id` параметрээр хоолойгоо сонгоно. Харин `speed` болон `pitch` параметрээр ярианы хурд болон өнгийг тааруулна.
+      operationId: synthesize
+      requestBody:
+        description: Хөрвүүлэх бичвэр
+        content:
+          text/plain: 
+            schema:
+              type: string
+      responses:
+        '200':
+          description: Амжилттай
+          content:
+            audio/x-wav: 
+              schema:
+                type: string
+                description: Хөрвөсөн аудио файл
+                format: binary
+        '400':
+          description: Оролтын бичвэртэй холбоотой алдаа
+          headers:
+            Error-Code: 
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 4000 - Error at receiving text data. Please check your connection and text data.
+                * 4001 - Text is too short. Minimum length of normalized text is 2.
+                * 4002 - Text is too long. Maximum length of normalized text is 300.
+                * 4003 - Invalid voice ID.
+                * 4004 - Invalid audio speed scale. Please set a value between 0.2 to 4.
+                * 4005 - The text contains special characters. Text can contain Cyrillic letters, spaces, ?, !, dots, hyphen, single quote, double quote, colon and commas.
+                * 4006 - The text contains a series of uppercase letters.
+                * 4007 - Invalid audio sample rate value. Valid values are 8000, 16000 and 22050.
+                * 4008 - Invalid audio pitch. Please set a value between 0.2 to 6.
+        '403':
+          description: Токентой холбоотой алдаа
+          headers:
+            Error-Code: 
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 1000 - Invalid API token.
+                * 1001 - API token is missing.
+                * 1002 - Inactive API token.
+                * 1003 - Suspended API token.
+        '500':
+          description: Таамаглаагүй алдаа гарсан
+        '503':
+          description: Серверийн ачаалал хэтэрсэн
+      x-codeSamples:        
+        - lang: Python
+          source: |
+            import requests
+
+
+            def synthesize(text):
+                url = "https://api.chimege.com/v1.2/synthesize"
+                headers = {
+                    'Content-Type': 'plain/text',
+                    'Token': 'API_TOKEN',
+                }
+
+                r = requests.post(
+                    url, data=text.encode('utf-8'), headers=headers)
+
+                with open("output.wav", 'wb') as out:
+                    out.write(r.content)
+
+
+            print(synthesize('Сайн байна уу'))
+        - lang: Go
+          source: |
+            package main
+
+            import (
+              "bytes"
+              "io/ioutil"
+              "log"
+              "net/http"
+            )
+
+            func main() {
+              data := []byte(`Сайн байна уу.`)
+
+              req, _ := http.NewRequest(
+                "POST", 
+                "https://api.chimege.com/v1.2/synthesize", 
+                bytes.NewBuffer(data))
+
+              req.Header.Set("Content-Type", "plain/text")
+              req.Header.Set("token", "API_TOKEN")
+
+              client := &http.Client{}
+
+              resp, err := client.Do(req)
+              if err != nil {
+                log.Fatal(err)
+              }
+              defer resp.Body.Close()
+
+              body, _ := ioutil.ReadAll(resp.Body)
+
+              ioutil.WriteFile("output.wav", body, 0644)
+            }
+  /normalize-text:
+    post:
+      tags:
+        - synthesize
+      parameters:
+        - name: token
+          in: header
+          description: "Таны API ашиглах токен"
+          required: false
+          schema:
+            type: string
+      summary: Бичвэрээс яриа руу хөрвүүлэх бичвэрийг засах
+      description: |
+        <p>
+          Яриа руу хөрвүүлэх бичвэрийг засна. Жишээлбэл:
+          <ul>
+            <li>Шаардлагагүй тэмдэгтүүдийг хасна.</li>
+            <li>Түгээмэл товчилсон үгсийг задална. (МУ - Монгол Улс)</li>
+            <li>Тоог задална. (123 - Зуун хорин гурав)</li>
+            <li>...</li>
+          </ul>
+        </p>
+      operationId: normalize-text
+      requestBody:
+        description: Бичвэр
+        content:
+          text/plain: 
+            schema:
+              type: string
+            example:
+              УБ-т 2021-04-13-нд 33000 тээврийн хэрэгсэл замын хөдөлгөөнд оролцжээ.
+      responses:
+        '200':
+          description: Амжилттай
+          content:
+            text/plain: 
+              schema:
+                type: string
+                description: Засагдсан бичвэр
+              example:
+                Улаанбаатарт хоёр мянга хорин нэгэн оны дөрвөн сарын арван гурванд гучин гурван мянган тээврийн хэрэгсэл замын хөдөлгөөнд оролцжээ. 
+        '400':
+          description: Оролтын бичвэртэй холбоотой алдаа
+          headers:
+            Error-Code: 
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 4000 - Error at receiving text data. Please check your connection and text data.
+        '403':
+          description: Токентой холбоотой алдаа
+          headers:
+            Error-Code: 
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 1000 - Invalid API token.
+                * 1001 - API token is missing.
+                * 1002 - Inactive API token.
+                * 1003 - Suspended API token.
+        '500':
+          description: Таамаглаагүй алдаа гарсан
+        '503':
+          description: Серверийн ачаалал хэтэрсэн
+      x-codeSamples:
+        - lang: Python
+          source: |
+            import requests
+
+
+            def normalize(text):
+                url = "https://api.chimege.com/v1.2/normalize-text"
+                headers = {
+                    'Content-Type': 'plain/text',
+                    'Token': 'API_TOKEN',
+                }
+
+                r = requests.post(
+                    url, data=text.encode('utf-8'), headers=headers)
+
+                return r.content.decode("utf-8")
+
+            text = 'УБ-т 2021-04-13-нд 33000 тээврийн хэрэгсэл замын хөдөлгөөнд оролцжээ.'
+            print(normalize(text))
+        - lang: Go
+          source: |
+            package main
+
+            import (
+              "bytes"
+              "io/ioutil"
+              "log"
+              "net/http"
+            )
+
+            func main() {
+              data := []byte(`Сайн байна уу.`)
+
+              req, _ := http.NewRequest(
+                "POST", 
+                "https://api.chimege.com/v1.2/normalize-text", 
+                bytes.NewBuffer(data))
+
+              req.Header.Set("Content-Type", "plain/text")
+              req.Header.Set("token", "API_TOKEN")
+
+              client := &http.Client{}
+
+              resp, err := client.Do(req)
+              if err != nil {
+                log.Fatal(err)
+              }
+              defer resp.Body.Close()
+
+              body, _ := ioutil.ReadAll(resp.Body)
+
+              normalized := string(body)
+              log.Println(normalized)
+            }
+  /stt-long:
+    post:
+      tags:
+        - stt-long
+      summary: Аудиог хүлээн авах
+      description: |
+        Хөрвүүлэх аудио файлаа байдлаар илгээгээд UUID авна. Уг UUID-г ашиглан хөрвөсөн бичвэрийг `/stt-long-transcript` endpoint-оор дамжуулан авна.
+      operationId: stt-long
+      requestBody:
+        description: Хөрвүүлэх аудио
+        content:
+          audio/wav:
+            schema:
+              type: string
+              format: binary
+      parameters:
+        - name: Token
+          in: header
+          description: "Таны API ашиглах токен"
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Хөрвүүлсэн текстийг буцаан авахад ашиглах UUID болон аудионы урт
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uuid:
+                    type: string
+                    description: Аудионд оноосон UUID
+                  duration:
+                    type: number
+                    description: Аудионы урт секундээр
+        '403':
+          description: Токентой холбоотой алдаа
+          headers:
+            Error-Code: 
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 1000 - Invalid API token.
+                * 1001 - API token is missing.
+                * 1002 - Inactive API token.
+                * 1003 - Suspended API token.
+        '500':
+          description: Тодорхойгүй алдаа
+
+      x-codeSamples:
+        - lang: Python
+          source: |
+            import requests
+
+            def pushAudio(filename):
+                with open(filename, 'rb') as f:
+                    audio = f.read()
+
+                url = "https://api.chimege.com/v1.2/stt-long"
+                headers = {
+                    'Content-Type': 'application/octet-stream',
+                    'Token': 'API_TOKEN',
+                }
+
+                r = requests.post(
+                    url, data=audio, headers=headers)
+
+                return r.json()
+
+
+            print(pushAudio('input.wav'))
+
+        - lang: Go
+          source: |
+            package main
+
+            import (
+              "bytes"
+              "encoding/json"
+              "fmt"
+              "io/ioutil"
+              "log"
+              "net/http"
+            )
+
+            type response struct {
+              UUID     string `json:"uuid"`
+              Duration string `json:"duration"`
+            }
+
+            func pushAudio(filename string) string {
+              data, _ := ioutil.ReadFile(filename)
+
+              req, _ := http.NewRequest(
+                "POST",
+                "https://api.chimege.com/v1.2/stt-long",
+                bytes.NewBuffer(data),
+              )
+
+              req.Header.Set("Content-Type", "application/octet-stream")
+              req.Header.Set("token", "API_TOKEN")
+
+              resp, err := http.DefaultClient.Do(req)
+              if err != nil {
+                log.Fatal(err)
+              }
+              defer resp.Body.Close()
+
+              body, _ := ioutil.ReadAll(resp.Body)
+              fmt.Println(string(body))
+              var b response
+              _ = json.Unmarshal(body, &b)
+              return b.UUID
+            }
+  /stt-long-transcript:
+    get:
+      tags:
+        - stt-long
+      summary: Хөрвөсөн бичвэрийг авах
+      description: |
+        UUID ашиглан хөрвөсөн бичвэрийг авна. 
+        Хөрвүүлж амжаагүй байх үед хөрвүүлэгдээгүй төлөв ирнэ. 
+
+        Энэ endpoint-г тогтмол интервалтай дуудаж аудио хөрвөж дууссан эсэхийг мэднэ. 
+        
+        Ойролцоогоор 1 цагийн аудиог 4 минутад хөрвүүлдэг бөгөөд серверийн ачааллыг 
+        бодолцон интервалыг хамгийн багадаа 1 секундээр тавина уу.
+      operationId: stt-long-transcript
+      parameters:
+        - name: Token
+          in: header
+          description: "Таны API ашиглах токен"
+          required: false
+          schema:
+            type: string
+        - name: UUID
+          in: header
+          description: "Аудионд оноосон UUID"
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Аудио хөрвүүлэгдсэн бол хөрвөсөн бичвэр, хөрвүүлэгдээгүй бол хөрвүүлэгдээгүй төлөв буцаж ирнэ.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    done:
+                      type: boolean
+                      description: Хөрвүүлэгдсэн эсэх 
+                    transcription:
+                      type: string
+                      description: Хөрвүүлсэн текст
+                    duration:
+                      type: number
+                      description: Аудионы урт секундээр
+        '403':
+          description: Токентой холбоотой алдаа
+          headers:
+            Error-Code: 
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 1000 - Invalid API token.
+                * 1001 - API token is missing.
+                * 1002 - Inactive API token.
+                * 1003 - Suspended API token.
+        '500':
+          description: Тодорхойгүй алдаа
+      x-codeSamples:
+        - lang: Python
+          source: |
+            import requests
+
+            def getTranscribed():
+                url = "https://api.chimege.com/v1.2/stt-long-transcript"
+                headers = {
+                    'Token': 'API_TOKEN',
+                    'UUID': 'AUDIO_UUID',
+                }
+                r = requests.get(url,  headers=headers)
+
+                if r.status_code != 200:
+                    return "Unknown error occurred"
+
+                print(r.status_code)
+                return r.json()
+
+            resp = getTranscribed()
+
+            if isinstance(resp, str):
+                print("Error Occurred: ", resp)
+            else: 
+                print(resp)
+        - lang: Go
+          source: |
+            package main
+
+            import (
+              "encoding/json"
+              "errors"
+              "fmt"
+              "log"
+              "net/http"
+            )
+
+            type TranscribedText struct {
+              Done          bool    `json:"done"`
+              Transcription string  `json:"transcription"`
+              Duration      float32 `json:"duration"`
+            }
+
+            func getOutputText() (*TranscribedText, error) {
+              req, _ := http.NewRequest(
+                "GET",
+                fmt.Sprintf("https://api.chimege.com/v1.2/stt-long-transcript"),
+                nil,
+              )
+
+              req.Header.Set("Token", "API_TOKEN")
+              req.Header.Set("UUID", "AUDIO_UUID")
+
+              resp, err := http.DefaultClient.Do(req)
+              if err != nil {
+                return nil, err
+              }
+              defer resp.Body.Close()
+
+              data := new(TranscribedText)
+              if resp.StatusCode != 200 {
+                return nil, errors.New("Sorry unknown error occurred")
+              }
+
+              if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+                return nil, err
+              }
+
+              return data, nil
+            }
+
+            func main() {
+              data, err := getOutputText()
+              if err != nil {
+                log.Fatal(err)
+                return
+              }
+              bytes, _ := json.Marshal(data)
+              fmt.Println(string(bytes))
+            }
+  /stt-long-hq:
+    post:
+      tags:
+        - stt-long-hq
+      summary: Аудиог хүлээн авах
+      description: |
+        Хөрвүүлэх аудио файлаа байдлаар илгээгээд UUID авна. Уг UUID-г ашиглан хөрвөсөн бичвэрийг `/stt-long-hq-transcript` endpoint-оор дамжуулан авна.
+      operationId: stt-long-hq
+      requestBody:
+        description: Хөрвүүлэх аудио
+        content:
+          audio/wav:
+            schema:
+              type: string
+              format: binary
+      parameters:
+        - name: Token
+          in: header
+          description: "Таны API ашиглах токен"
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Хөрвүүлсэн текстийг буцаан авахад ашиглах UUID болон аудионы урт
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uuid:
+                    type: string
+                    description: Аудионд оноосон UUID
+                  duration:
+                    type: number
+                    description: Аудионы урт секундээр
+        '403':
+          description: Токентой холбоотой алдаа
+          headers:
+            Error-Code: 
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 1000 - Invalid API token.
+                * 1001 - API token is missing.
+                * 1002 - Inactive API token.
+                * 1003 - Suspended API token.
+        '500':
+          description: Тодорхойгүй алдаа
+
+      x-codeSamples:
+        - lang: Python
+          source: |
+            import requests
+
+            def pushAudio(filename):
+                with open(filename, 'rb') as f:
+                    audio = f.read()
+
+                url = "https://api.chimege.com/v1.2/stt-long-hq"
+                headers = {
+                    'Content-Type': 'application/octet-stream',
+                    'Token': 'API_TOKEN',
+                }
+
+                r = requests.post(
+                    url, data=audio, headers=headers)
+
+                return r.json()
+
+
+            print(pushAudio('input.wav'))
+
+        - lang: Go
+          source: |
+            package main
+
+            import (
+              "bytes"
+              "encoding/json"
+              "fmt"
+              "io/ioutil"
+              "log"
+              "net/http"
+            )
+
+            type response struct {
+              UUID     string `json:"uuid"`
+              Duration string `json:"duration"`
+            }
+
+            func pushAudio(filename string) string {
+              data, _ := ioutil.ReadFile(filename)
+
+              req, _ := http.NewRequest(
+                "POST",
+                "https://api.chimege.com/v1.2/stt-long-hq",
+                bytes.NewBuffer(data),
+              )
+
+              req.Header.Set("Content-Type", "application/octet-stream")
+              req.Header.Set("token", "API_TOKEN")
+
+              resp, err := http.DefaultClient.Do(req)
+              if err != nil {
+                log.Fatal(err)
+              }
+              defer resp.Body.Close()
+
+              body, _ := ioutil.ReadAll(resp.Body)
+              fmt.Println(string(body))
+              var b response
+              _ = json.Unmarshal(body, &b)
+              return b.UUID
+            }
+  /stt-long-hq-transcript:
+    get:
+      tags:
+        - stt-long-hq
+      summary: Хөрвөсөн бичвэрийг авах
+      description: |
+        UUID ашиглан хөрвөсөн бичвэрийг авна. 
+        Хөрвүүлж амжаагүй байх үед хөрвүүлэгдээгүй төлөв ирнэ. 
+
+        Энэ endpoint-г тогтмол интервалтай дуудаж аудио хөрвөж дууссан эсэхийг мэднэ. 
+        
+        Ойролцоогоор 1 цагийн аудиог 4 минутад хөрвүүлдэг бөгөөд серверийн ачааллыг 
+        бодолцон интервалыг хамгийн багадаа 1 секундээр тавина уу.
+      operationId: stt-long-hq-transcript
+      parameters:
+        - name: Token
+          in: header
+          description: "Таны API ашиглах токен"
+          required: false
+          schema:
+            type: string
+        - name: UUID
+          in: header
+          description: "Аудионд оноосон UUID"
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Аудио хөрвүүлэгдсэн бол хөрвөсөн бичвэр, хөрвүүлэгдээгүй бол хөрвүүлэгдээгүй төлөв буцаж ирнэ.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    done:
+                      type: boolean
+                      description: Хөрвүүлэгдсэн эсэх 
+                    transcription:
+                      type: string
+                      description: Хөрвүүлсэн текст
+                    duration:
+                      type: number
+                      description: Аудионы урт секундээр
+        '403':
+          description: Токентой холбоотой алдаа
+          headers:
+            Error-Code: 
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 1000 - Invalid API token.
+                * 1001 - API token is missing.
+                * 1002 - Inactive API token.
+                * 1003 - Suspended API token.
+        '500':
+          description: Тодорхойгүй алдаа
+      x-codeSamples:
+        - lang: Python
+          source: |
+            import requests
+
+            def getTranscribed():
+                url = "https://api.chimege.com/v1.2/stt-long-hq-transcript"
+                headers = {
+                    'Token': 'API_TOKEN',
+                    'UUID': 'AUDIO_UUID',
+                }
+                r = requests.get(url,  headers=headers)
+
+                if r.status_code != 200:
+                    return "Unknown error occurred"
+
+                print(r.status_code)
+                return r.json()
+
+            resp = getTranscribed()
+
+            if isinstance(resp, str):
+                print("Error Occurred: ", resp)
+            else: 
+                print(resp)
+        - lang: Go
+          source: |
+            package main
+
+            import (
+              "encoding/json"
+              "errors"
+              "fmt"
+              "log"
+              "net/http"
+            )
+
+            type TranscribedText struct {
+              Done          bool    `json:"done"`
+              Transcription string  `json:"transcription"`
+              Duration      float32 `json:"duration"`
+            }
+
+            func getOutputText() (*TranscribedText, error) {
+              req, _ := http.NewRequest(
+                "GET",
+                fmt.Sprintf("https://api.chimege.com/v1.2/stt-long-hq-transcript"),
+                nil,
+              )
+
+              req.Header.Set("Token", "API_TOKEN")
+              req.Header.Set("UUID", "AUDIO_UUID")
+
+              resp, err := http.DefaultClient.Do(req)
+              if err != nil {
+                return nil, err
+              }
+              defer resp.Body.Close()
+
+              data := new(TranscribedText)
+              if resp.StatusCode != 200 {
+                return nil, errors.New("Sorry unknown error occurred")
+              }
+
+              if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+                return nil, err
+              }
+
+              return data, nil
+            }
+
+            func main() {
+              data, err := getOutputText()
+              if err != nil {
+                log.Fatal(err)
+                return
+              }
+              bytes, _ := json.Marshal(data)
+              fmt.Println(string(bytes))
+            }
+  /spell-check:
+    post:
+      tags:
+        - spell-check
+      summary: Бичвэрийн алдаа шалгах
+      description: Бичвэрийн алдааг шалгаж алдаатай үгсийн жагсаалтыг буцаана. Танигдахгүй үгсийг алдаатай гэж үзэхгүй тул жагсаалтад орохгүй. Жагсаалтад байгаа үгс хоорондоо давхцалгүй байна. Бичвэрийн урт хамгийн ихдээ 4000 тэмдэгт байна.
+      operationId: spell-check
+      requestBody:
+        description: Алдааг шалгах бичвэр
+        content:
+          text/plain:
+            schema:
+              type: string
+      responses:
+        "200":
+          description: Алдаатай үгийн жагсаалт
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+        "400":
+          description: Оролтын бичвэртэй холбоотой алдаа
+          headers:
+            Error-Code:
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 5000 - Error at receiving text data. Please check your connection and text data.
+                * 5001 - Text is too long. Maximum length of text is 4000 characters.
+        "403":
+          description: Токентой холбоотой алдаа
+          headers:
+            Error-Code:
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 1000 - Invalid API token.
+                * 1001 - API token is missing.
+                * 1002 - Inactive API token.
+                * 1003 - Suspended API token.
+        "500":
+          description: Таамаглаагүй алдаа гарсан
+      x-codeSamples:
+        - lang: "Go"
+          source: |
+            package main
+
+            import (
+              "bytes"
+              "encoding/json"
+              "log"
+              "net/http"
+            )
+
+            func main() {
+              data := []byte("Энд алдаатаай бичвэрр байна.")
+
+              req, _ := http.NewRequest(
+                "POST",
+                "https://api.bolor.net/v1.2/spell-check",
+                bytes.NewBuffer(data))
+
+              req.Header.Set("Content-Type", "text/plain")
+              req.Header.Set("token", "{API_TOKEN}")
+
+              client := &http.Client{}
+
+              resp, err := client.Do(req)
+              if err != nil {
+                log.Fatal(err)
+              }
+              defer resp.Body.Close()
+
+              var incorrects []string
+              if err := json.NewDecoder(resp.Body).Decode(&incorrects); err != nil {
+                log.Fatal(err)
+              }
+
+              log.Println(incorrects)
+            }
+  /spell-check-short:
+    post:
+      tags:
+        - spell-check
+      summary: Бичвэрийн алдаа шалгах (богино хэмжээний)
+      description: Бичвэрийн алдааг шалгаж алдаатай үгсийн жагсаалтыг буцаана. Танигдахгүй үгсийг алдаатай гэж үзэхгүй тул жагсаалтад орохгүй. Жагсаалтад байгаа үгс хоорондоо давхцалгүй байна. Бичвэрийн урт хамгийн ихдээ 200 тэмдэгт байна.
+      operationId: spell-check-short
+      requestBody:
+        description: Алдааг шалгах бичвэр
+        content:
+          text/plain:
+            schema:
+              type: string
+      responses:
+        "200":
+          description: Алдаатай үгийн жагсаалт
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+        "400":
+          description: Оролтын бичвэртэй холбоотой алдаа
+          headers:
+            Error-Code:
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 5000 - Error at receiving text data. Please check your connection and text data.
+                * 5004 - Text is too long. Maximum length of text is 200 characters.
+        "403":
+          description: Токентой холбоотой алдаа
+          headers:
+            Error-Code:
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 1000 - Invalid API token.
+                * 1001 - API token is missing.
+                * 1002 - Inactive API token.
+                * 1003 - Suspended API token.
+        "500":
+          description: Таамаглаагүй алдаа гарсан
+      x-codeSamples:
+        - lang: "Go"
+          source: |
+            package main
+
+            import (
+              "bytes"
+              "encoding/json"
+              "log"
+              "net/http"
+            )
+
+            func main() {
+              data := []byte("Энд алдаатаай бичвэрр байна.")
+
+              req, _ := http.NewRequest(
+                "POST",
+                "https://api.bolor.net/v1.2/spell-check",
+                bytes.NewBuffer(data))
+
+              req.Header.Set("Content-Type", "text/plain")
+              req.Header.Set("token", "{API_TOKEN}")
+
+              client := &http.Client{}
+
+              resp, err := client.Do(req)
+              if err != nil {
+                log.Fatal(err)
+              }
+              defer resp.Body.Close()
+
+              var incorrects []string
+              if err := json.NewDecoder(resp.Body).Decode(&incorrects); err != nil {
+                log.Fatal(err)
+              }
+
+              log.Println(incorrects)
+            }
+  /spell-suggest:
+    post:
+      tags:
+        - spell-suggest
+      summary: Үг санал болгох
+      description: |
+        Оролтын үгтэй ойролцоо үгсийн жагсаалт гаргаж өгнө. Энэхүү функц алдаа шалгахаас харьцангуй удаан тул хэрэглэгчид санал болгох үгс гаргах мөчид л дуудаж ашиглана уу.
+      operationId: spell-suggest
+      requestBody:
+        description: Алдаатай үг. Олон үг оруулбал хамгийн эхний үгийг л авна.
+        content:
+          text/plain:
+            schema:
+              type: string
+      responses:
+        "200":
+          description: Санал болгож буй үгсийн жагсаалт
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+        "400":
+          description: Оролтын үгтэй холбоотой алдаа
+          headers:
+            Error-Code:
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 5000 - Error at receiving text data. Please check your connection and text data.
+                * 5002 - Invalid data. Please send mongolian word to get suggestions.
+        "403":
+          description: Токентой холбоотой алдаа
+          headers:
+            Error-Code:
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 1000 - Invalid API token.
+                * 1001 - API token is missing.
+                * 1002 - Inactive API token.
+                * 1003 - Suspended API token.
+        "500":
+          description: Таамаглаагүй алдаа гарсан
+      x-codeSamples:
+        - lang: Go
+          source: |
+            package main
+
+            import (
+              "bytes"
+              "encoding/json"
+              "log"
+              "net/http"
+            )
+
+            func main() {
+              data := []byte("Алдаатаай")
+
+              req, _ := http.NewRequest(
+                "POST",
+                "https://api.bolor.net/v1.2/spell-suggest",
+                bytes.NewBuffer(data))
+
+              req.Header.Set("Content-Type", "text/plain")
+              req.Header.Set("token", "{API_TOKEN}")
+
+              client := &http.Client{}
+
+              resp, err := client.Do(req)
+              if err != nil {
+                log.Fatal(err)
+              }
+              defer resp.Body.Close()
+
+              var suggestions []string
+              if err := json.NewDecoder(resp.Body).Decode(&suggestions); err != nil {
+                log.Fatal(err)
+              }
+
+              log.Println(suggestions)
+            }
+  /kimo:
+    post:
+      tags:
+        - kimo
+      summary: Кимо хөрвүүлэгч
+      description: |
+        Монгол бичгийн текстийг кирилл текст болгон хөрвүүлэх мөн кирилл текстийг монгол бичигт хөрвүүлнэ. Текстийн урт нь хамгийн ихдээ 4000 байна.
+      operationId: kimo
+      parameters:
+        - name: Type
+          in: header
+          description: |
+            Хөрвүүлэх чиглэлийг заана.
+            * `to-mng` - кириллээс монгол бичигт хөрвүүлэх. 
+            * `to-mn` - монгол бичгээс кирилл рүү хөрвүүлэх.
+          required: true
+          schema:
+            type: string
+            enum: [to-mng, to-mn]
+      requestBody:
+        description: Монгол бичиг эсвэл кирилл текст авна.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+      responses:
+        "200":
+          description: Хөрвүүлсэн текст
+          content:
+            text/plain:
+              schema:
+                type: string
+        "400":
+          description: Оролтын текстэй холбоотой алдаа
+          headers:
+            Error-Code:
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 5000 - Error at receiving text data. Please check your connection and text data.
+                * 5001 - Text is too long. Maximum length of text is 4000 characters.
+                * 5003 - Type header missing or invalid. 'type' header must be set to to-mn' or 'to-mng'.
+        "403":
+          description: Токентой холбоотой алдаа
+          headers:
+            Error-Code:
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 1000 - Invalid API token.
+                * 1001 - API token is missing.
+                * 1002 - Inactive API token.
+                * 1003 - Suspended API token.
+        "500":
+          description: Таамаглаагүй алдаа гарсан
+      x-codeSamples:
+        - lang: Python
+          source: |
+            import requests
+            import json
+
+
+            def kimo(text,type):
+                url = "https://api.chimege.com/v1.2/kimo"
+                headers = {
+                    'Content-Type': 'application/json',
+                    'Token': 'API_TOKEN',
+                    'Type': type
+                }
+                data = json.dumps({'Text': text})
+                r = requests.post(
+                    url, data= data, headers=headers
+                )
+                return r.content.decode("utf-8")
+
+            print(kimo("монгол","to-mng"))
+            print(kimo("ᠮᠣᠩᠭᠤᠯ","to-mn"))
+
+        - lang: Go
+          source: |
+            package main
+
+            import (
+              "bytes"
+              "encoding/json"
+              "log"
+              "net/http"
+            )
+            type Data struct{
+              Text string `json:"text"`
+            }
+            func main() {
+              data, err:= json.Marshal(Data{Text:"Энд хөвүүлэх текст байна."})
+              if err!=nil{
+                log.Fatal(err)
+              }
+
+              req, _ := http.NewRequest(
+                "POST",
+                "https://api.bolor.net/v1.2/kimo",
+                bytes.NewBuffer(data))
+
+              req.Header.Set("Content-Type", "application/json")
+              req.Header.Set("type", "to-mng or to-mn")
+              req.Header.Set("token", "{API_TOKEN}")
+
+              client := &http.Client{}
+
+              resp, err := client.Do(req)
+              if err != nil {
+                log.Fatal(err)
+              }
+              defer resp.Body.Close()
+
+              convertedText :=string(resp.Body)
+
+              log.Println(convertedText)
+            }
+  /kimo-short:
+    post:
+      tags:
+        - kimo
+      summary: Кимо хөрвүүлэгч (бага хэмжээний)
+      description: |
+        Монгол бичгийн текстийг кирилл текст болгон хөрвүүлэх мөн кирилл текстийг монгол бичигт хөрвүүлнэ. Текстийн урт нь хамгийн ихдээ 200 байна.
+      operationId: kimo-short
+      parameters:
+        - name: Type
+          in: header
+          description: |
+            Хөрвүүлэх чиглэлийг заана.
+            * `to-mng` - кириллээс монгол бичигт хөрвүүлэх. 
+            * `to-mn` - монгол бичгээс кирилл рүү хөрвүүлэх.
+          required: true
+          schema:
+            type: string
+            enum: [to-mng, to-mn]
+      requestBody:
+        description: Монгол бичиг эсвэл кирилл текст авна.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+      responses:
+        "200":
+          description: Хөрвүүлсэн текст
+          content:
+            text/plain:
+              schema:
+                type: string
+        "400":
+          description: Оролтын текстэй холбоотой алдаа
+          headers:
+            Error-Code:
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 5000 - Error at receiving text data. Please check your connection and text data.
+                * 5003 - Type header missing or invalid. 'type' header must be set to to-mn' or 'to-mng'.
+                * 5004 - Text is too long. Maximum length of text is 200 characters.
+        "403":
+          description: Токентой холбоотой алдаа
+          headers:
+            Error-Code:
+              schema:
+                type: integer
+              description: |
+                Алдааны код.
+                * 1000 - Invalid API token.
+                * 1001 - API token is missing.
+                * 1002 - Inactive API token.
+                * 1003 - Suspended API token.
+        "500":
+          description: Таамаглаагүй алдаа гарсан
+      x-codeSamples:
+        - lang: Python
+          source: |
+            import requests
+            import json
+
+
+            def kimo(text,type):
+                url = "https://api.chimege.com/v1.2/kimo-short"
+                headers = {
+                    'Content-Type': 'application/json',
+                    'Token': 'API_TOKEN',
+                    'Type': type
+                }
+                data = json.dumps({'Text': text})
+                r = requests.post(
+                    url, data= data, headers=headers
+                )
+                return r.content.decode("utf-8")
+
+            print(kimo("монгол","to-mng"))
+            print(kimo("ᠮᠣᠩᠭᠤᠯ","to-mn"))
+
+        - lang: Go
+          source: |
+            package main
+
+            import (
+              "bytes"
+              "encoding/json"
+              "log"
+              "net/http"
+            )
+            type Data struct{
+              Text string `json:"text"`
+            }
+            func main() {
+              data, err:= json.Marshal(Data{Text:"Энд хөвүүлэх текст байна."})
+              if err!=nil{
+                log.Fatal(err)
+              }
+
+              req, _ := http.NewRequest(
+                "POST",
+                "https://api.bolor.net/v1.2/kimo-short",
+                bytes.NewBuffer(data))
+
+              req.Header.Set("Content-Type", "application/json")
+              req.Header.Set("type", "to-mng or to-mn")
+              req.Header.Set("token", "{API_TOKEN}")
+
+              client := &http.Client{}
+
+              resp, err := client.Do(req)
+              if err != nil {
+                log.Fatal(err)
+              }
+              defer resp.Body.Close()
+
+              convertedText :=string(resp.Body)
+
+              log.Println(convertedText)
+            }

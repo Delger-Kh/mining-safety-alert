@@ -1,17 +1,17 @@
-# ⛏️ Mining Safety Alert System
+#  Mining Safety Alert System
 ### Уурхайн Аюулын Мэдэгдлийн Систем
 
 > A real-time hazard reporting mobile application built for **Erdenet Mining Corporation** during a software engineering internship. Workers capture photo/voice evidence of workplace hazards — the system uses AI to classify danger severity and automatically sends SMS alerts to supervisors.
 
 ---
 
-## 🎯 Problem
+##  Problem
 
 Erdenet Mining Corporation needed a faster way for workers to report hazardous situations on-site. Traditional reporting (phone calls, paper forms) is slow, inconsistent, and fails when workers are in areas with limited connectivity. Supervisors need to be notified immediately with enough context to act.
 
 ---
 
-## 🏗️ System Architecture
+##  System Architecture
 
 ```
 Flutter App (Mobile)
@@ -33,7 +33,7 @@ Flutter App (Mobile)
 
 ---
 
-## ✨ Features
+##  Features
 
 - **Multi-modal input** — photo, voice (Mongolian), and text, used together for classification
 - **Live Mongolian captions** — transcript appears in real time while worker is still recording
@@ -45,7 +45,7 @@ Flutter App (Mobile)
 
 ---
 
-## 🛠️ Tech Stack
+##  Tech Stack
 
 | Layer | Technology | Why |
 |---|---|---|
@@ -58,7 +58,7 @@ Flutter App (Mobile)
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 mining-safety-alert/
@@ -111,7 +111,7 @@ MONGO_URI=
 
 ---
 
-## 📊 API Endpoints
+##  API Endpoints
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -123,14 +123,13 @@ MONGO_URI=
 | GET | `/api/history/:id` | Single report by ID |
 
 ---
-
-## 🔍 Why Chimege for Mongolian STT?
+##  Why Chimege for Mongolian STT?
 
 Mongolian is a low-resource language — generic speech APIs (Google, Azure, OpenAI Whisper) achieve 10-25% word error rate on Mongolian. Chimege is a Mongolian startup that has trained specifically on Mongolian speech data and achieves ~4% WER. For a safety system where misheard words could affect hazard classification, this accuracy gap matters. Chimege is already deployed by Mobicom (Mongolia's largest telecom) and Golomt Bank.
 
 ---
 
-## ⚠️ Current Limitations
+##  Current Limitations
 
 - Requires internet connection for AI classification and SMS (offline-first was evaluated but descoped for v1 — see architecture notes)
 - Twilio free trial limits SMS to verified numbers only; production deployment would use a Mongolian carrier direct integration
@@ -138,7 +137,7 @@ Mongolian is a low-resource language — generic speech APIs (Google, Azure, Ope
 
 ---
 
-## 📝 Built During
+##  Built During
 
 **Internship** — Erdenet Mining Corporation, System Development Department  
 **Period** — June–July 2026  

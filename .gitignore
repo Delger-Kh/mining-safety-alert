@@ -1,0 +1,7 @@
+﻿backend/node_modules/
+backend/.env
+backend/uploads/
+frontend/build/
+frontend/.dart_tool/
+frontend/android/.gradle/
+frontend/android/local.properties

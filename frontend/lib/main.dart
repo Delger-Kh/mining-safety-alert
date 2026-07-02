@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'history_screen.dart';
 
 void main() {
   runApp(const MyApp());
@@ -296,6 +297,16 @@ class _HazardReportPageState extends State<HazardReportPage> {
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         title: const Text('Аюулын тухай мэдээлэх'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: 'Түүх',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => HistoryScreen(backendBase: backendBase)),
+            ),
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -317,7 +328,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
             ),
             const SizedBox(height: 20),
 
-            const Text('Зураг', style: TextStyle(fontWeight: FontWeight.w600)),
+            const Text('Зураг (заавал биш)', style: TextStyle(fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             Container(
               height: 200,
@@ -349,7 +360,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
             ]),
             const SizedBox(height: 20),
 
-            const Text('Яриа', style: TextStyle(fontWeight: FontWeight.w600)),
+            const Text('Дуут мэдэгдэл (заавал биш)', style: TextStyle(fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
 
             // ── LIVE CAPTION BOX ──
@@ -378,7 +389,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
                   if (_isRecording) const SizedBox(height: 6),
                   Text(
                     _liveTranscript.isEmpty
-                        ? (_isRecording ? 'Ярьж эхэлнэ үү...' : '')
+                        ? (_isRecording ? 'Ярьж эхэлнэ үү...' : 'Бичлэг хийгээгүй байна')
                         : _liveTranscript,
                     style: TextStyle(
                       fontSize: 15,
@@ -395,7 +406,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
               Expanded(child: ElevatedButton.icon(
                 onPressed: _isSubmitting ? null : (_isRecording ? _stopRecording : _startRecording),
                 icon: Icon(_isRecording ? Icons.stop : Icons.mic),
-                label: Text(_isRecording ? 'Зогсоох' : 'Дуу хоолойгоо бичих'),
+                label: Text(_isRecording ? 'Зогсоох' : 'Бичлэг эхлэх'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _isRecording ? Colors.red : null,
                   foregroundColor: _isRecording ? Colors.white : null,

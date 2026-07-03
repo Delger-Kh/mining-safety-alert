@@ -34,11 +34,44 @@ const reportSchema = new mongoose.Schema({
     type:     { type: String },
     severity: { type: String },
   },
+  reporterPhone: { type: String, default: "" },
+  reporterName:  { type: String, default: "" },
+  reporterEmployeeId: { type: String, default: "" },
   createdAt:  { type: Date, default: Date.now },
 });
 const Report = mongoose.model("Report", reportSchema);
 
-// ─── Цех → supervisor phone numbers ────────────────────────────────────────
+// ─── Users (login) ───────────────────────────────────────────────────────────
+// role: "ажилтан" (employee), "tsekh_darga" (цехийн дарга), "hub_darga" (хаб-ын дарга)
+const userSchema = new mongoose.Schema({
+  name:       { type: String, required: true },
+  employeeId: { type: String, required: true, unique: true }, // internal ID the person types in to log in
+  phone:      { type: String, required: true }, // used only for SMS alerts, not for login
+  role:       { type: String, enum: ["ажилтан", "tsekh_darga", "hub_darga"], default: "ажилтан" },
+  tsekh:      { type: String, default: "" }, // employee's own цех / tsekh_darga's managed цех (hub_darga: not tied to one цех)
+  createdAt:  { type: Date, default: Date.now },
+});
+const User = mongoose.model("User", userSchema);
+
+const ROLE_MN = {
+  "ажилтан":     "Ажилтан",
+  "tsekh_darga": "Цехийн дарга",
+  "hub_darga":   "Хаб-ын дарга",
+};
+
+// ─── In-app notifications for supervisors ────────────────────────────────────
+const notificationSchema = new mongoose.Schema({
+  recipientPhone: { type: String, required: true },
+  reportId:       { type: mongoose.Schema.Types.ObjectId, ref: "Report" },
+  tsekh:          { type: String, default: "" },
+  severity:       { type: String, default: "" },
+  message:        { type: String, default: "" },
+  read:           { type: Boolean, default: false },
+  createdAt:      { type: Date, default: Date.now },
+});
+const Notification = mongoose.model("Notification", notificationSchema);
+
+// ─── Цех → supervisor phone numbers (fallback if no users registered) ───────
 const MY_TEST_NUMBER = "+97680509572";
 
 const TSEKH_CONTACTS = {
@@ -51,6 +84,21 @@ const TSEKH_CONTACTS = {
   "Агуулах":        [MY_TEST_NUMBER],
   "Администраци":   [MY_TEST_NUMBER],
 };
+
+// Finds who should be alerted for a given цех: the hub director (all цехs)
+// plus that цех's own tsekh_darga. Falls back to the static test list if
+// no users have been registered yet for that цех.
+async function getResponsibleUsers(tsekh) {
+  const [hubDargas, tsekhDargas] = await Promise.all([
+    User.find({ role: "hub_darga" }),
+    User.find({ role: "tsekh_darga", tsekh }),
+  ]);
+  const users = [...hubDargas, ...tsekhDargas];
+  if (users.length === 0) {
+    return (TSEKH_CONTACTS[tsekh] || [MY_TEST_NUMBER]).map((phone) => ({ phone, name: "", role: "" }));
+  }
+  return users.map((u) => ({ phone: u.phone, name: u.name, role: u.role }));
+}
 
 // ─── Twilio ─────────────────────────────────────────────────────────────────
 const twilioClient = twilio(
@@ -67,8 +115,7 @@ function buildAlertMessage(tsekh, severity, hazardType) {
   return short.length <= 70 ? short : short.slice(0, 67) + "...";
 }
 
-async function sendSmsAlerts(tsekh, severity, hazardType) {
-  const numbers = TSEKH_CONTACTS[tsekh];
+async function sendSmsAlerts(numbers, tsekh, severity, hazardType) {
   if (!numbers || numbers.length === 0) {
     console.log(`[SMS] No contacts found for цех: ${tsekh}`);
     return { sent: [], failed: [] };
@@ -95,6 +142,29 @@ async function sendSmsAlerts(tsekh, severity, hazardType) {
     }
   }
   return { sent, failed };
+}
+
+// Creates in-app notifications for hub/tsekh dargas (separate from SMS,
+// so they still see it in the app even if the SMS failed or was skipped).
+async function createNotifications(users, reportId, tsekh, severity, hazardType) {
+  const severityLabel = severityMnBackend(severity);
+  const message = `${tsekh}: ${hazardType} — ${severityLabel} аюул илэрлээ.`;
+  const docs = users
+    .filter((u) => u.phone)
+    .map((u) => ({
+      recipientPhone: u.phone,
+      reportId,
+      tsekh,
+      severity,
+      message,
+    }));
+  if (docs.length > 0) {
+    await Notification.insertMany(docs);
+  }
+}
+
+function severityMnBackend(severity) {
+  return { low: "бага", medium: "дунд", high: "өндөр", critical: "яаралтай" }[severity] || severity;
 }
 
 // ─── Chimege (Mongolian Speech-to-Text) ──────────────────────────────────────
@@ -196,6 +266,77 @@ app.get("/api/tsekh", (req, res) => {
   res.json(Object.keys(TSEKH_CONTACTS));
 });
 
+// ─── Auth: register + login (phone-based, no password — internal tool) ──────
+app.post("/api/register", async (req, res) => {
+  try {
+    const { name, employeeId, phone, role, tsekh } = req.body || {};
+    if (!name || !employeeId || !phone || !role) {
+      return res.status(400).json({ error: "Нэр, ажилтны дугаар, утасны дугаар, албан тушаалыг бөглөнө үү." });
+    }
+    if (!["ажилтан", "tsekh_darga", "hub_darga"].includes(role)) {
+      return res.status(400).json({ error: "Албан тушаал буруу байна." });
+    }
+    if (role !== "hub_darga" && !tsekh) {
+      return res.status(400).json({ error: "Цехээ сонгоно уу." });
+    }
+
+    const existing = await User.findOne({ employeeId });
+    if (existing) {
+      return res.status(409).json({ error: "Энэ ажилтны дугаар аль хэдийн бүртгэгдсэн байна. Нэвтэрнэ үү." });
+    }
+
+    const user = await User.create({ name, employeeId, phone, role, tsekh: tsekh || "" });
+    console.log(`[Auth] Registered: ${user.name} (${user.employeeId}, ${ROLE_MN[user.role]}, ${user.tsekh || "бүх цех"})`);
+    res.json({
+      _id: user._id, name: user.name, employeeId: user.employeeId, phone: user.phone,
+      role: user.role, roleLabel: ROLE_MN[user.role], tsekh: user.tsekh,
+    });
+  } catch (err) {
+    console.error("Error in /api/register:", err);
+    res.status(500).json({ error: "Бүртгэхэд алдаа гарлаа", details: err.message });
+  }
+});
+
+app.post("/api/login", async (req, res) => {
+  try {
+    const { employeeId } = req.body || {};
+    if (!employeeId) return res.status(400).json({ error: "Ажилтны дугаараа оруулна уу." });
+
+    const user = await User.findOne({ employeeId });
+    if (!user) {
+      return res.status(404).json({ error: "Хэрэглэгч олдсонгүй. Эхлээд бүртгүүлнэ үү." });
+    }
+    console.log(`[Auth] Logged in: ${user.name} (${user.employeeId}, ${ROLE_MN[user.role]})`);
+    res.json({
+      _id: user._id, name: user.name, employeeId: user.employeeId, phone: user.phone,
+      role: user.role, roleLabel: ROLE_MN[user.role], tsekh: user.tsekh,
+    });
+  } catch (err) {
+    console.error("Error in /api/login:", err);
+    res.status(500).json({ error: "Нэвтрэхэд алдаа гарлаа", details: err.message });
+  }
+});
+
+// ─── In-app notifications (for хаб-ын дарга / цехийн дарга) ─────────────────
+app.get("/api/notifications/:phone", async (req, res) => {
+  try {
+    const notifications = await Notification.find({ recipientPhone: req.params.phone })
+      .sort({ createdAt: -1 }).limit(100);
+    res.json(notifications);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch notifications" });
+  }
+});
+
+app.post("/api/notifications/:id/read", async (req, res) => {
+  try {
+    await Notification.findByIdAndUpdate(req.params.id, { read: true });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update notification" });
+  }
+});
+
 // POST /api/transcribe-chunk — live caption chunk endpoint
 app.post("/api/transcribe-chunk", chunkUpload, async (req, res) => {
   try {
@@ -223,6 +364,9 @@ app.post("/api/classify", upload, async (req, res) => {
     const audioFile = req.files?.["audio"]?.[0];
     const tsekh = req.body?.tsekh || "";
     const providedTranscript = req.body?.transcript || "";
+    const reporterPhone = req.body?.reporterPhone || "";
+    const reporterName = req.body?.reporterName || "";
+    const reporterEmployeeId = req.body?.reporterEmployeeId || "";
 
     if (!photoFile && !audioFile && !providedTranscript) {
       return res.status(400).json({ error: "Зураг эсвэл дуу хоёрын аль нэгийг илгээнэ үү." });
@@ -300,6 +444,9 @@ app.post("/api/classify", upload, async (req, res) => {
       audioSize: audioFile?.size || 0,
       transcript,
       tsekh,
+      reporterPhone,
+      reporterName,
+      reporterEmployeeId,
       aiResult: result,
     });
 
@@ -342,9 +489,13 @@ app.post("/api/confirm", async (req, res) => {
     const shouldAlert = isHazard && (finalSeverity === "high" || finalSeverity === "critical");
     let smsNumbers = [];
     let smsFailed = [];
+    let responsibleUsers = [];
     if (shouldAlert) {
       const typeLabel = HAZARD_TYPE_MN[finalType] || finalType;
-      const smsResult = await sendSmsAlerts(draft.tsekh, finalSeverity, typeLabel);
+      responsibleUsers = await getResponsibleUsers(draft.tsekh);
+      const smsResult = await sendSmsAlerts(
+        responsibleUsers.map((u) => u.phone), draft.tsekh, finalSeverity, typeLabel
+      );
       smsNumbers = smsResult.sent;
       smsFailed = smsResult.failed;
     }
@@ -365,7 +516,15 @@ app.post("/api/confirm", async (req, res) => {
       smsFailed,
       wasEdited,
       aiOriginal: { type: draft.aiResult.type, severity: draft.aiResult.severity },
+      reporterPhone: draft.reporterPhone || "",
+      reporterName:  draft.reporterName || "",
+      reporterEmployeeId: draft.reporterEmployeeId || "",
     });
+
+    if (shouldAlert && responsibleUsers.length > 0) {
+      const typeLabel = HAZARD_TYPE_MN[finalType] || finalType;
+      await createNotifications(responsibleUsers, report._id, draft.tsekh, finalSeverity, typeLabel);
+    }
 
     console.log(`[DB] Report saved: ${report._id}${wasEdited ? " (edited)" : ""}`);
 
@@ -394,7 +553,10 @@ app.post("/api/confirm", async (req, res) => {
 app.get("/api/history", async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
-    const reports = await Report.find().sort({ createdAt: -1 }).limit(limit).select("-__v");
+    const filter = {};
+    if (req.query.reporterPhone) filter.reporterPhone = req.query.reporterPhone;
+    if (req.query.reporterEmployeeId) filter.reporterEmployeeId = req.query.reporterEmployeeId;
+    const reports = await Report.find(filter).sort({ createdAt: -1 }).limit(limit).select("-__v");
     res.json(reports);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch history" });

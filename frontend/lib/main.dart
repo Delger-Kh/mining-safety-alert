@@ -8,6 +8,9 @@ import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'history_screen.dart';
+import 'app_user.dart';
+import 'login_screen.dart';
+import 'notifications_screen.dart';
 
 void main() {
   runApp(const MyApp());
@@ -23,7 +26,9 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepOrange),
         useMaterial3: true,
       ),
-      home: const HazardReportPage(),
+      // App now starts on the login screen. Once a user logs in or
+      // registers, LoginScreen pushes HazardReportPage with that user.
+      home: const LoginScreen(),
     );
   }
 }
@@ -61,7 +66,8 @@ Color severityColor(String? severity) {
 // SCREEN 1: Capture — now with LIVE captions while recording
 // ════════════════════════════════════════════════════════════════════
 class HazardReportPage extends StatefulWidget {
-  const HazardReportPage({super.key});
+  final AppUser currentUser;
+  const HazardReportPage({super.key, required this.currentUser});
   @override
   State<HazardReportPage> createState() => _HazardReportPageState();
 }
@@ -88,10 +94,32 @@ class _HazardReportPageState extends State<HazardReportPage> {
   bool _isSubmitting = false;
   String? _errorMessage;
 
+  bool get _isSupervisor =>
+      widget.currentUser.role == 'tsekh_darga' || widget.currentUser.role == 'hub_darga';
+  int _unreadNotifications = 0;
+
   @override
   void initState() {
     super.initState();
     _loadTsekhList();
+    // Employees default to their own цех so they don't have to pick it every time.
+    if (widget.currentUser.tsekh.isNotEmpty) {
+      _selectedTsekh = widget.currentUser.tsekh;
+    }
+    if (_isSupervisor) _loadUnreadNotificationCount();
+  }
+
+  Future<void> _loadUnreadNotificationCount() async {
+    try {
+      final res = await http.get(Uri.parse('$backendBase/api/notifications/${widget.currentUser.phone}'));
+      if (res.statusCode == 200) {
+        final list = jsonDecode(res.body) as List;
+        final unread = list.where((n) => n['read'] != true).length;
+        if (mounted) setState(() => _unreadNotifications = unread);
+      }
+    } catch (_) {
+      // Non-critical — badge just won't update.
+    }
   }
 
   @override
@@ -250,6 +278,9 @@ class _HazardReportPageState extends State<HazardReportPage> {
       final request = http.MultipartRequest('POST', uri);
       request.fields['tsekh'] = _selectedTsekh!;
       request.fields['transcript'] = _liveTranscript.trim();
+      request.fields['reporterPhone'] = widget.currentUser.phone;
+      request.fields['reporterName'] = widget.currentUser.name;
+      request.fields['reporterEmployeeId'] = widget.currentUser.employeeId;
 
       if (_selectedImage != null) {
         request.files.add(await http.MultipartFile.fromPath('photo', _selectedImage!.path));
@@ -296,8 +327,50 @@ class _HazardReportPageState extends State<HazardReportPage> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: const Text('Аюулын тухай мэдээлэх'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Аюулын тухай мэдээлэх'),
+            Text(
+              '${widget.currentUser.name} (${widget.currentUser.employeeId}) · ${widget.currentUser.roleLabel}',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.normal),
+            ),
+          ],
+        ),
         actions: [
+          if (_isSupervisor)
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.notifications_outlined),
+                  tooltip: 'Мэдэгдэл',
+                  onPressed: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => NotificationsScreen(
+                        backendBase: backendBase,
+                        phone: widget.currentUser.phone,
+                      )),
+                    );
+                    _loadUnreadNotificationCount();
+                  },
+                ),
+                if (_unreadNotifications > 0)
+                  Positioned(
+                    right: 8, top: 8,
+                    child: Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                      constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                      child: Text('$_unreadNotifications',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white, fontSize: 10)),
+                    ),
+                  ),
+              ],
+            ),
           IconButton(
             icon: const Icon(Icons.history),
             tooltip: 'Түүх',
@@ -305,6 +378,17 @@ class _HazardReportPageState extends State<HazardReportPage> {
               context,
               MaterialPageRoute(builder: (_) => HistoryScreen(backendBase: backendBase)),
             ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Гарах',
+            onPressed: () {
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (route) => false,
+              );
+            },
           ),
         ],
       ),

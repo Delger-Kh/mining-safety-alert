@@ -5,11 +5,10 @@ import 'app_user.dart';
 import 'config.dart';
 import 'main.dart';
 
-// Roles shown to the person registering, mapped to the backend's role keys.
 const Map<String, String> roleMn = {
-  'ажилтан': 'Ажилтан',
+  'ажилтан':     'Ажилтан',
   'tsekh_darga': 'Цехийн дарга',
-  'hub_darga': 'Хаб-ын дарга',
+  'hub_darga':   'Хаб-ын дарга',
 };
 
 class LoginScreen extends StatefulWidget {
@@ -23,11 +22,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   String? _errorMessage;
 
-  // Shared field
   final _employeeIdController = TextEditingController();
-
-  // Register-only fields
-  final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
   String _selectedRole = 'ажилтан';
   String? _selectedTsekh;
@@ -43,7 +38,6 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _employeeIdController.dispose();
     _phoneController.dispose();
-    _nameController.dispose();
     super.dispose();
   }
 
@@ -72,7 +66,11 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _login() async {
     final employeeId = _employeeIdController.text.trim();
     if (employeeId.isEmpty) {
-      setState(() => _errorMessage = 'Ажилтны дугаараа оруулна уу.');
+      setState(() => _errorMessage = 'Бүртгэлийн дугаараа оруулна уу.');
+      return;
+    }
+    if (!RegExp(r'^\d{5}$').hasMatch(employeeId)) {
+      setState(() => _errorMessage = 'Бүртгэлийн дугаар 5 оронтой тоо байх ёстой.');
       return;
     }
 
@@ -100,10 +98,13 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _register() async {
     final employeeId = _employeeIdController.text.trim();
     final phone = _phoneController.text.trim();
-    final name = _nameController.text.trim();
 
-    if (name.isEmpty || employeeId.isEmpty || phone.isEmpty) {
-      setState(() => _errorMessage = 'Нэр, ажилтны дугаар, утасны дугаараа оруулна уу.');
+    if (employeeId.isEmpty || phone.isEmpty) {
+      setState(() => _errorMessage = 'Бүртгэлийн дугаар болон утасны дугаараа оруулна уу.');
+      return;
+    }
+    if (!RegExp(r'^\d{5}$').hasMatch(employeeId)) {
+      setState(() => _errorMessage = 'Бүртгэлийн дугаар 5 оронтой тоо байх ёстой. Жишээ: 12345');
       return;
     }
     if (_selectedRole != 'hub_darga' && _selectedTsekh == null) {
@@ -117,9 +118,8 @@ class _LoginScreenState extends State<LoginScreen> {
         Uri.parse('$kBackendBase/api/register'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'name': name,
           'employeeId': employeeId,
-          'phone': phone,
+          'phone': '+976$phone',
           'role': _selectedRole,
           'tsekh': _selectedRole == 'hub_darga' ? '' : _selectedTsekh,
         }),
@@ -148,7 +148,7 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(height: 24),
+              const SizedBox(height: 32),
               Icon(Icons.warning_amber_rounded, size: 64, color: Colors.deepOrange[700]),
               const SizedBox(height: 12),
               const Text(
@@ -158,55 +158,56 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 4),
               Text(
+                '"Эрдэнэт Үйлдвэр" ТӨҮГ',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+              ),
+              const SizedBox(height: 8),
+              Text(
                 _isRegisterMode ? 'Шинэ хэрэглэгч бүртгүүлэх' : 'Нэвтрэх',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                style: TextStyle(fontSize: 14, color: Colors.grey[500]),
               ),
               const SizedBox(height: 32),
 
-              if (_isRegisterMode) ...[
-                const Text('Овог нэр', style: TextStyle(fontWeight: FontWeight.w600)),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: _nameController,
-                  decoration: InputDecoration(
-                    hintText: 'Таны нэр',
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  ),
-                ),
-                const SizedBox(height: 16),
-              ],
-
-              Text(
-                _isRegisterMode ? 'Ажилтны дугаар үүсгэх' : 'Ажилтны дугаар',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
+              // ── Бүртгэлийн дугаар ──
+              const Text('Бүртгэлийн дугаар', style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 6),
               TextField(
                 controller: _employeeIdController,
+                keyboardType: TextInputType.number,
+                maxLength: 5,
                 decoration: InputDecoration(
-                  hintText: _isRegisterMode ? 'ж: EMP-0231' : 'Ажилтны дугаараа оруулна уу',
+                  hintText: '5 оронтой дугаар',
+                  prefixIcon: const Icon(Icons.badge_outlined),
+                  counterText: '',
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                   contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 ),
+                onSubmitted: (_) => _isRegisterMode ? _register() : _login(),
               ),
 
               if (_isRegisterMode) ...[
                 const SizedBox(height: 16),
+
+                // ── Phone ──
                 const Text('Утасны дугаар (SMS-д ашиглагдана)', style: TextStyle(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 6),
                 TextField(
                   controller: _phoneController,
                   keyboardType: TextInputType.phone,
+                  maxLength: 8,
                   decoration: InputDecoration(
                     hintText: '99112233',
                     prefixText: '+976 ',
+                    counterText: '',
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   ),
                 ),
                 const SizedBox(height: 16),
+
+                // ── Role ──
                 const Text('Албан тушаал', style: TextStyle(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<String>(
@@ -219,18 +220,19 @@ class _LoginScreenState extends State<LoginScreen> {
                   items: roleMn.entries
                       .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
                       .toList(),
-                  onChanged: (v) => setState(() => _selectedRole = v!),
+                  onChanged: (v) => setState(() { _selectedRole = v!; _selectedTsekh = null; }),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   _selectedRole == 'hub_darga'
-                      ? 'Хаб-ын дарга бүх цехийн ШУУД АЮУЛТАЙ мэдэгдлийг хүлээн авна.'
+                      ? 'Хаб-ын дарга бүх цехийн яаралтай мэдэгдлийг хүлээн авна.'
                       : _selectedRole == 'tsekh_darga'
                           ? 'Цехийн дарга зөвхөн өөрийн цехийн мэдэгдлийг хүлээн авна.'
-                          : 'Ажилтан аюулын талаар мэдээлж, өөрийн түүхээ харах боломжтой.',
+                          : 'Ажилтан аюулын тухай мэдэгдэж, өөрийн түүхээ харах боломжтой.',
                   style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                 ),
 
+                // ── Tsekh (only if not hub_darga) ──
                 if (_selectedRole != 'hub_darga') ...[
                   const SizedBox(height: 16),
                   const Text('Цех', style: TextStyle(fontWeight: FontWeight.w600)),
@@ -254,7 +256,11 @@ class _LoginScreenState extends State<LoginScreen> {
               if (_errorMessage != null) ...[
                 Container(
                   padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(color: Colors.red[50], borderRadius: BorderRadius.circular(8)),
+                  decoration: BoxDecoration(
+                    color: Colors.red[50],
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.red[200]!),
+                  ),
                   child: Text(_errorMessage!, style: TextStyle(color: Colors.red[900])),
                 ),
                 const SizedBox(height: 16),
@@ -266,6 +272,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   backgroundColor: Colors.deepOrange,
                   foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
                 child: _isLoading
                     ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
@@ -278,10 +285,14 @@ class _LoginScreenState extends State<LoginScreen> {
                     : () => setState(() {
                           _isRegisterMode = !_isRegisterMode;
                           _errorMessage = null;
+                          _employeeIdController.clear();
                         }),
-                child: Text(_isRegisterMode
-                    ? 'Бүртгэлтэй хэрэглэгч үү? Нэвтрэх'
-                    : 'Анх удаа хэрэглэж байна уу? Бүртгүүлэх'),
+                child: Text(
+                  _isRegisterMode
+                      ? 'Бүртгэлтэй хэрэглэгч үү? Нэвтрэх'
+                      : 'Анх удаа хэрэглэж байна уу? Бүртгүүлэх',
+                  style: const TextStyle(color: Colors.deepOrange),
+                ),
               ),
             ],
           ),

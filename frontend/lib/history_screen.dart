@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'app_user.dart';
 
 const Map<String, String> hazardTypeMnH = {
   'structural': 'Барилгын бүтцийн аюул',
@@ -41,14 +42,14 @@ String _timeAgo(String? isoDate) {
     if (diff.inHours < 24) return '${diff.inHours}ц өмнө';
     if (diff.inDays < 7) return '${diff.inDays}ө өмнө';
     return '${dt.year}-${dt.month.toString().padLeft(2,'0')}-${dt.day.toString().padLeft(2,'0')}';
-  } catch (_) {
-    return '';
-  }
+  } catch (_) { return ''; }
 }
 
 class HistoryScreen extends StatefulWidget {
   final String backendBase;
-  const HistoryScreen({super.key, required this.backendBase});
+  final AppUser currentUser;
+
+  const HistoryScreen({super.key, required this.backendBase, required this.currentUser});
 
   @override
   State<HistoryScreen> createState() => _HistoryScreenState();
@@ -59,18 +60,47 @@ class _HistoryScreenState extends State<HistoryScreen> {
   bool _isLoading = true;
   String? _error;
 
+  // hub_darga can toggle to see test data too
+  bool _showTestData = false;
+
   @override
   void initState() {
     super.initState();
     _loadHistory();
   }
 
+  String get _screenTitle {
+    switch (widget.currentUser.role) {
+      case 'hub_darga':    return 'Бүх тайлан';
+      case 'tsekh_darga':  return '${widget.currentUser.tsekh} — Тайлан';
+      default:             return 'Миний тайлангууд';
+    }
+  }
+
   Future<void> _loadHistory() async {
     setState(() { _isLoading = true; _error = null; });
+
     try {
-      final res = await http
-          .get(Uri.parse('${widget.backendBase}/api/history?limit=100'))
-          .timeout(const Duration(seconds: 15));
+      // Build URL based on role
+      final params = <String, String>{
+        'limit': '100',
+        'role': widget.currentUser.role,
+      };
+
+      if (widget.currentUser.role == 'ажилтан') {
+        params['reporterEmployeeId'] = widget.currentUser.employeeId;
+      } else if (widget.currentUser.role == 'tsekh_darga') {
+        params['tsekh'] = widget.currentUser.tsekh;
+      }
+      // hub_darga — no extra params needed
+
+      if (_showTestData) params['includeTestData'] = 'true';
+
+      final uri = Uri.parse('${widget.backendBase}/api/history')
+          .replace(queryParameters: params);
+
+      final res = await http.get(uri).timeout(const Duration(seconds: 15));
+
       if (res.statusCode == 200) {
         final list = (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
         setState(() { _reports = list; _isLoading = false; });
@@ -84,11 +114,23 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isHub = widget.currentUser.role == 'hub_darga';
+
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: const Text('Мэдээллийн түүх'),
+        title: Text(_screenTitle),
         actions: [
+          // Hub дарга can toggle test data visibility
+          if (isHub)
+            IconButton(
+              icon: Icon(_showTestData ? Icons.visibility_off : Icons.visibility),
+              tooltip: _showTestData ? 'Тест өгөгдөл нуух' : 'Тест өгөгдөл харах',
+              onPressed: () {
+                setState(() => _showTestData = !_showTestData);
+                _loadHistory();
+              },
+            ),
           IconButton(icon: const Icon(Icons.refresh), onPressed: _loadHistory),
         ],
       ),
@@ -103,10 +145,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   ElevatedButton(onPressed: _loadHistory, child: const Text('Дахин оролдох')),
                 ]))
               : _reports.isEmpty
-                  ? const Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                      Icon(Icons.inbox_outlined, size: 64, color: Colors.grey),
-                      SizedBox(height: 12),
-                      Text('Одоогоор мэдээлэл байхгүй', style: TextStyle(color: Colors.grey)),
+                  ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                      const Icon(Icons.inbox_outlined, size: 64, color: Colors.grey),
+                      const SizedBox(height: 12),
+                      Text(
+                        widget.currentUser.role == 'ажилтан'
+                            ? 'Та одоогоор мэдэгдэл илгээгээгүй байна'
+                            : 'Одоогоор тайлан байхгүй байна',
+                        style: const TextStyle(color: Colors.grey),
+                      ),
                     ]))
                   : RefreshIndicator(
                       onRefresh: _loadHistory,
@@ -118,6 +165,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                           final r = _reports[index];
                           return _ReportCard(
                             report: r,
+                            showReporter: widget.currentUser.role != 'ажилтан',
                             onTap: () => Navigator.push(context,
                               MaterialPageRoute(builder: (_) => ReportDetailScreen(report: r))),
                           );
@@ -130,8 +178,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
 class _ReportCard extends StatelessWidget {
   final Map<String, dynamic> report;
+  final bool showReporter;
   final VoidCallback onTap;
-  const _ReportCard({required this.report, required this.onTap});
+  const _ReportCard({required this.report, required this.showReporter, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -140,13 +189,21 @@ class _ReportCard extends StatelessWidget {
     final isHazard = report['is_hazard'] == true;
     final alerted = report['alerted'] == true;
     final tsekh = report['tsekh'] as String? ?? '';
+    final reporterName = report['reporterName'] as String? ?? '';
+    final reporterEmployeeId = report['reporterEmployeeId'] as String? ?? '';
+    final isTestData = report['isTestData'] == true;
     final color = severityColorH(severity);
 
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10),
-        side: BorderSide(color: isHazard ? color.withOpacity(0.4) : Colors.grey[300]!, width: 1),
+        side: BorderSide(
+          color: isTestData
+              ? Colors.grey[300]!
+              : (isHazard ? color.withOpacity(0.4) : Colors.green[200]!),
+          width: 1,
+        ),
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(10),
@@ -155,10 +212,11 @@ class _ReportCard extends StatelessWidget {
           padding: const EdgeInsets.all(12),
           child: Row(
             children: [
+              // Severity bar
               Container(
-                width: 4, height: 52,
+                width: 4, height: 56,
                 decoration: BoxDecoration(
-                  color: isHazard ? color : Colors.green,
+                  color: isTestData ? Colors.grey[300] : (isHazard ? color : Colors.green),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -168,17 +226,27 @@ class _ReportCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(children: [
+                      if (isTestData)
+                        Container(
+                          margin: const EdgeInsets.only(right: 6),
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(4)),
+                          child: const Text('TEST', style: TextStyle(fontSize: 9, color: Colors.grey, fontWeight: FontWeight.bold)),
+                        ),
                       Expanded(
                         child: Text(
                           hazardTypeMnH[type] ?? type ?? 'Тодорхойгүй',
-                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                            color: isTestData ? Colors.grey : null,
+                          ),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       if (alerted) const Icon(Icons.sms, size: 14, color: Colors.red),
                     ]),
                     const SizedBox(height: 4),
-                    // ── FIXED: use Flexible so text never overflows ──
                     Row(children: [
                       const Icon(Icons.location_on_outlined, size: 13, color: Colors.grey),
                       const SizedBox(width: 2),
@@ -192,6 +260,19 @@ class _ReportCard extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontSize: 12, color: Colors.grey))),
                     ]),
+                    // Show reporter info for supervisors
+                    if (showReporter && reporterName.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Row(children: [
+                        const Icon(Icons.person_outline, size: 13, color: Colors.blueGrey),
+                        const SizedBox(width: 2),
+                        Flexible(child: Text(
+                          '$reporterName ($reporterEmployeeId)',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11, color: Colors.blueGrey),
+                        )),
+                      ]),
+                    ],
                   ],
                 ),
               ),
@@ -199,16 +280,22 @@ class _ReportCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                 decoration: BoxDecoration(
-                  color: isHazard ? color.withOpacity(0.12) : Colors.green[50],
+                  color: isTestData
+                      ? Colors.grey[100]
+                      : (isHazard ? color.withOpacity(0.12) : Colors.green[50]),
                   borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: isHazard ? color.withOpacity(0.4) : Colors.green[200]!),
+                  border: Border.all(
+                    color: isTestData
+                        ? Colors.grey[300]!
+                        : (isHazard ? color.withOpacity(0.4) : Colors.green[200]!),
+                  ),
                 ),
                 child: Text(
                   isHazard ? (severityMnH[severity] ?? severity ?? '') : 'АЮУЛГҮЙ',
                   style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w700,
-                    color: isHazard ? color : Colors.green[700],
+                    color: isTestData ? Colors.grey : (isHazard ? color : Colors.green[700]),
                   ),
                 ),
               ),
@@ -239,6 +326,9 @@ class ReportDetailScreen extends StatelessWidget {
     final wasEdited = report['wasEdited'] == true;
     final aiOriginal = report['aiOriginal'] as Map<String, dynamic>?;
     final smsNumbers = (report['smsNumbers'] as List?)?.cast<String>() ?? [];
+    final reporterName = report['reporterName'] as String? ?? '';
+    final reporterEmployeeId = report['reporterEmployeeId'] as String? ?? '';
+    final isTestData = report['isTestData'] == true;
     final color = severityColorH(severity);
 
     return Scaffold(
@@ -251,6 +341,26 @@ class ReportDetailScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Test data banner
+            if (isTestData)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey[300]!),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.science_outlined, size: 16, color: Colors.grey),
+                  const SizedBox(width: 8),
+                  const Text('Тест өгөгдөл — нэвтрэлгүй үед илгээгдсэн',
+                      style: TextStyle(fontSize: 12, color: Colors.grey)),
+                ]),
+              ),
+
+            // Header
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(14),
@@ -278,8 +388,11 @@ class ReportDetailScreen extends StatelessWidget {
               ]),
             ),
             const SizedBox(height: 12),
+
             _detailRow(Icons.location_on_outlined, 'Цех', tsekh),
             _detailRow(Icons.access_time, 'Огноо', _timeAgo(report['createdAt'] as String?)),
+            if (reporterName.isNotEmpty)
+              _detailRow(Icons.person_outline, 'Илгээсэн', '$reporterName ($reporterEmployeeId)'),
             const SizedBox(height: 16),
 
             if (reasoning.isNotEmpty) ...[
@@ -304,10 +417,7 @@ class ReportDetailScreen extends StatelessWidget {
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.blue[50],
-                  borderRadius: BorderRadius.circular(8),
-                ),
+                decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(8)),
                 child: Text('"$transcript"',
                     style: TextStyle(color: Colors.blue[900], fontStyle: FontStyle.italic, height: 1.4)),
               ),
@@ -330,9 +440,7 @@ class ReportDetailScreen extends StatelessWidget {
                         style: TextStyle(fontWeight: FontWeight.w600, color: Colors.amber[900], fontSize: 13)),
                   ]),
                   const SizedBox(height: 6),
-                  Text('AI санал болгосон төрөл: ${hazardTypeMnH[aiOriginal['type']] ?? aiOriginal['type']}',
-                      style: TextStyle(fontSize: 12, color: Colors.amber[800])),
-                  Text('AI санал болгосон түвшин: ${severityMnH[aiOriginal['severity']] ?? aiOriginal['severity']}',
+                  Text('AI санал: ${hazardTypeMnH[aiOriginal['type']] ?? aiOriginal['type']} / ${severityMnH[aiOriginal['severity']] ?? aiOriginal['severity']}',
                       style: TextStyle(fontSize: 12, color: Colors.amber[800])),
                 ]),
               ),

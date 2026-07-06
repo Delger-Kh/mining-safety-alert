@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
@@ -63,6 +64,97 @@ Color severityColor(String? severity) {
 }
 
 // ════════════════════════════════════════════════════════════════════
+// WAV CHUNK MERGING
+// The live-caption flow records several short ~4s WAV chunks back to
+// back (so it can transcribe-as-you-go). Each chunk is a fully valid,
+// separate WAV file with its own 44-byte header. To end up with ONE
+// playable recording for the whole hazard report, we strip each
+// chunk's header, concatenate the raw PCM audio samples, and write a
+// single new header sized for the combined data.
+// ════════════════════════════════════════════════════════════════════
+
+int _findDataChunkOffset(Uint8List bytes) {
+  for (int i = 12; i < bytes.length - 4; i++) {
+    if (bytes[i] == 0x64 && bytes[i + 1] == 0x61 && bytes[i + 2] == 0x74 && bytes[i + 3] == 0x61) {
+      return i; // offset of the ASCII 'data' tag
+    }
+  }
+  return -1;
+}
+
+Uint8List _buildWavHeader(int dataLength, int sampleRate, int numChannels, int bitsPerSample) {
+  final byteRate = sampleRate * numChannels * bitsPerSample ~/ 8;
+  final blockAlign = numChannels * bitsPerSample ~/ 8;
+  final header = BytesBuilder();
+
+  void writeString(String s) => header.add(s.codeUnits);
+  void writeUint32(int v) {
+    final b = ByteData(4)..setUint32(0, v, Endian.little);
+    header.add(b.buffer.asUint8List());
+  }
+  void writeUint16(int v) {
+    final b = ByteData(2)..setUint16(0, v, Endian.little);
+    header.add(b.buffer.asUint8List());
+  }
+
+  writeString('RIFF');
+  writeUint32(36 + dataLength);
+  writeString('WAVE');
+  writeString('fmt ');
+  writeUint32(16); // PCM fmt chunk size
+  writeUint16(1);  // audio format: PCM
+  writeUint16(numChannels);
+  writeUint32(sampleRate);
+  writeUint32(byteRate);
+  writeUint16(blockAlign);
+  writeUint16(bitsPerSample);
+  writeString('data');
+  writeUint32(dataLength);
+
+  return header.toBytes();
+}
+
+/// Merges a list of WAV chunk files (in order) into a single WAV file
+/// at [outputPath]. Returns the output File, or null if there was
+/// nothing usable to merge.
+Future<File?> mergeWavChunks(List<String> chunkPaths, String outputPath) async {
+  final pcmData = BytesBuilder();
+  int sampleRate = 16000;
+  int numChannels = 1;
+  int bitsPerSample = 16;
+  bool haveFormat = false;
+
+  for (final path in chunkPaths) {
+    final file = File(path);
+    if (!await file.exists()) continue;
+    final bytes = await file.readAsBytes();
+    if (bytes.length < 44) continue;
+
+    final dataOffset = _findDataChunkOffset(bytes);
+    if (dataOffset == -1) continue;
+
+    if (!haveFormat) {
+      final byteData = ByteData.sublistView(bytes);
+      numChannels = byteData.getUint16(22, Endian.little);
+      sampleRate = byteData.getUint32(24, Endian.little);
+      bitsPerSample = byteData.getUint16(34, Endian.little);
+      haveFormat = true;
+    }
+
+    // Skip the 8-byte "data" + size sub-header, keep only raw samples.
+    pcmData.add(bytes.sublist(dataOffset + 8));
+  }
+
+  final rawData = pcmData.toBytes();
+  if (rawData.isEmpty) return null;
+
+  final header = _buildWavHeader(rawData.length, sampleRate, numChannels, bitsPerSample);
+  final outFile = File(outputPath);
+  await outFile.writeAsBytes([...header, ...rawData]);
+  return outFile;
+}
+
+// ════════════════════════════════════════════════════════════════════
 // SCREEN 1: Capture — now with LIVE captions while recording
 // ════════════════════════════════════════════════════════════════════
 class HazardReportPage extends StatefulWidget {
@@ -80,9 +172,11 @@ class _HazardReportPageState extends State<HazardReportPage> {
   final AudioRecorder _recorder = AudioRecorder();
 
   bool _isRecording = false;
-  String? _finalAudioPath;     // path of the full combined recording (for fallback re-transcription)
+  String? _finalAudioPath;     // merged, final WAV for the whole recording — this is what gets uploaded
+  final List<String> _chunkPaths = []; // every chunk recorded this session, in order, kept until merged
   String _liveTranscript = ''; // grows as chunks come back
   bool _isTranscribingChunk = false;
+  bool _isMergingAudio = false;
 
   Timer? _chunkTimer;
   static const Duration chunkDuration = Duration(seconds: 4); // short chunk = faster feedback
@@ -164,6 +258,10 @@ class _HazardReportPageState extends State<HazardReportPage> {
   // worker would notice), and send the just-finished chunk to the
   // backend for transcription. Append the returned text to the
   // growing _liveTranscript as it comes back.
+  //
+  // IMPORTANT: unlike before, chunk files are now KEPT (not deleted)
+  // until recording stops, at which point they're merged into one
+  // final WAV file (_finalAudioPath) that actually gets uploaded.
   Future<void> _startRecording() async {
     final status = await Permission.microphone.request();
     if (!status.isGranted) {
@@ -172,10 +270,17 @@ class _HazardReportPageState extends State<HazardReportPage> {
       return;
     }
 
+    // Clean up anything left over from a previous recording session.
+    await _deleteFileQuietly(_finalAudioPath);
+    for (final p in _chunkPaths) {
+      await _deleteFileQuietly(p);
+    }
+
     setState(() {
       _isRecording = true;
       _liveTranscript = '';
       _finalAudioPath = null;
+      _chunkPaths.clear();
       _errorMessage = null;
       _chunkCounter = 0;
     });
@@ -203,9 +308,9 @@ class _HazardReportPageState extends State<HazardReportPage> {
     if (!_isRecording) return;
 
     final path = await _recorder.stop();
-    _finalAudioPath = path; // keep the most recent chunk path as a fallback
 
     if (path != null) {
+      _chunkPaths.add(path);
       _sendChunkForTranscription(path); // fire-and-forget, don't block next recording
     }
 
@@ -240,8 +345,8 @@ class _HazardReportPageState extends State<HazardReportPage> {
       // The worker just won't see that fragment; not critical.
     } finally {
       if (mounted) setState(() => _isTranscribingChunk = false);
-      // Clean up the chunk file now that we're done with it
-      try { await File(path).delete(); } catch (_) {}
+      // NOTE: chunk file is intentionally NOT deleted here anymore —
+      // it's needed later to build the final merged recording.
     }
   }
 
@@ -249,17 +354,54 @@ class _HazardReportPageState extends State<HazardReportPage> {
     _chunkTimer?.cancel();
     setState(() => _isRecording = false);
 
-    // Stop whatever chunk is currently in progress and transcribe it too
+    // Stop whatever chunk is currently in progress, keep it, and transcribe it too.
     final path = await _recorder.stop();
     if (path != null) {
+      _chunkPaths.add(path);
       await _sendChunkForTranscription(path);
+    }
+
+    await _buildFinalRecording();
+  }
+
+  Future<void> _buildFinalRecording() async {
+    if (_chunkPaths.isEmpty) return;
+
+    setState(() => _isMergingAudio = true);
+    try {
+      final dir = await getTemporaryDirectory();
+      final outputPath = '${dir.path}/hazard_report_${DateTime.now().millisecondsSinceEpoch}.wav';
+      final merged = await mergeWavChunks(_chunkPaths, outputPath);
+
+      // Chunks are no longer needed once merged — clean them up.
+      for (final p in _chunkPaths) {
+        await _deleteFileQuietly(p);
+      }
+      _chunkPaths.clear();
+
+      if (mounted) setState(() => _finalAudioPath = merged?.path);
+    } finally {
+      if (mounted) setState(() => _isMergingAudio = false);
     }
   }
 
+  Future<void> _deleteFileQuietly(String? path) async {
+    if (path == null) return;
+    try {
+      final f = File(path);
+      if (await f.exists()) await f.delete();
+    } catch (_) {}
+  }
+
   void _clearVoice() {
+    _deleteFileQuietly(_finalAudioPath);
+    for (final p in _chunkPaths) {
+      _deleteFileQuietly(p);
+    }
     setState(() {
       _liveTranscript = '';
       _finalAudioPath = null;
+      _chunkPaths.clear();
     });
   }
 
@@ -286,6 +428,16 @@ class _HazardReportPageState extends State<HazardReportPage> {
         request.files.add(await http.MultipartFile.fromPath('photo', _selectedImage!.path));
       }
 
+      // ── This is the piece that was missing: actually attach the
+      // merged voice recording, under the field name the backend
+      // expects ("audio"), so it gets persisted to the `audio` GridFS
+      // bucket in /api/confirm instead of vanishing.
+      if (_finalAudioPath != null && await File(_finalAudioPath!).exists()) {
+        request.files.add(await http.MultipartFile.fromPath(
+          'audio', _finalAudioPath!, filename: 'voice_report.wav',
+        ));
+      }
+
       final streamedResponse = await request.send().timeout(const Duration(seconds: 60));
       final response = await http.Response.fromStream(streamedResponse);
 
@@ -302,6 +454,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
         );
 
         if (confirmed == true) {
+          await _deleteFileQuietly(_finalAudioPath);
           setState(() {
             _selectedImage = null;
             _liveTranscript = '';
@@ -322,7 +475,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
   @override
   Widget build(BuildContext context) {
     final hasVoice = _liveTranscript.trim().isNotEmpty;
-    final canSubmit = (_selectedImage != null || hasVoice) && !_isSubmitting && !_isRecording;
+    final canSubmit = (_selectedImage != null || hasVoice) && !_isSubmitting && !_isRecording && !_isMergingAudio;
 
     return Scaffold(
       appBar: AppBar(
@@ -376,7 +529,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
             tooltip: 'Түүх',
             onPressed: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => HistoryScreen(backendBase: backendBase)),
+              MaterialPageRoute(builder: (_) => HistoryScreen(backendBase: backendBase, currentUser: widget.currentUser)),
             ),
           ),
           IconButton(
@@ -470,7 +623,13 @@ class _HazardReportPageState extends State<HazardReportPage> {
                         const SizedBox(height: 10, width: 10, child: CircularProgressIndicator(strokeWidth: 1.5)),
                       ],
                     ]),
-                  if (_isRecording) const SizedBox(height: 6),
+                  if (_isMergingAudio)
+                    Row(children: [
+                      const SizedBox(height: 10, width: 10, child: CircularProgressIndicator(strokeWidth: 1.5)),
+                      const SizedBox(width: 8),
+                      Text('Бичлэгийг нэгтгэж байна...', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+                    ]),
+                  if (_isRecording || _isMergingAudio) const SizedBox(height: 6),
                   Text(
                     _liveTranscript.isEmpty
                         ? (_isRecording ? 'Ярьж эхэлнэ үү...' : 'Бичлэг хийгээгүй байна')
@@ -488,7 +647,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
 
             Row(children: [
               Expanded(child: ElevatedButton.icon(
-                onPressed: _isSubmitting ? null : (_isRecording ? _stopRecording : _startRecording),
+                onPressed: (_isSubmitting || _isMergingAudio) ? null : (_isRecording ? _stopRecording : _startRecording),
                 icon: Icon(_isRecording ? Icons.stop : Icons.mic),
                 label: Text(_isRecording ? 'Зогсоох' : 'Бичлэг эхлэх'),
                 style: ElevatedButton.styleFrom(

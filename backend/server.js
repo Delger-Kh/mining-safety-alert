@@ -942,6 +942,22 @@ app.delete("/api/history/:id", async (req, res) => {
   }
 });
 
+// GET /api/stats
+app.get("/api/stats", async (req, res) => {
+  try {
+    const [total, hazards, bySeverity, byType, byTsekh] = await Promise.all([
+      Report.countDocuments(),
+      Report.countDocuments({ is_hazard: true }),
+      Report.aggregate([{ $match: { is_hazard: true } }, { $group: { _id: "$severity", count: { $sum: 1 } } }]),
+      Report.aggregate([{ $match: { is_hazard: true } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
+      Report.aggregate([{ $group: { _id: "$tsekh", count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
+    ]);
+    res.json({ total, hazards, bySeverity, byType, byTsekh });
+  } catch (err) {
+    res.status(500).json({ error: "Failed" });
+  }
+});
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`\nMine Safety Backend running on port ${PORT}`);
   console.log(`  Flow: /api/transcribe-chunk -> /api/classify -> /api/confirm\n`);

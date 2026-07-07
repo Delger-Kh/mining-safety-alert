@@ -147,7 +147,9 @@ Mongolian is a low-resource language — generic speech APIs (Google, Azure, Ope
 
 ##  Author
 
-Delger Khorolmaa 
+Delger Khorolmaa
+
 Software Engineering Student  
 Mongolian University of Science and Technology 
+
 GitHub: [@Delger-Kh](https://github.com/Delger-Kh)

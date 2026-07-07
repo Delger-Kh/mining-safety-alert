@@ -137,6 +137,11 @@ const reportSchema = new mongoose.Schema({
   smsFailed:  [{ type: String }],
   wasEdited:  { type: Boolean, default: false },
   isTestData: { type: Boolean, default: false },
+  // ── NEW: records whether the image and voice/text classifications
+  // disagreed with each other before being merged. Lets the review
+  // screen or history list flag "AI sources disagreed" for a human to
+  // double-check, instead of silently picking one side.
+  sourcesConflicted: { type: Boolean, default: false },
   aiOriginal: {
     type:     { type: String },
     severity: { type: String },
@@ -417,7 +422,6 @@ const SYSTEM_PROMPT = `Чи уурхайн аюулгүй байдлын мэр�
 
 Зааварчилгаа:
 - "is_hazard" нь зөвхөн зураг/дуу нь бүрэн аюулгүй, хэвийн ажлын орчинг харуулж байгаа тохиолдолд л false байна.
-- Хэрэв зураг, дуут мэдэгдэл хоёулаа байгаа бол хоёуланг нь хослуулж дүгнэлт гарга.
 - Түвшний удирдамж:
   - low: бага зэргийн асуудал, шууд аюул байхгүй
   - medium: удахгүй засах шаардлагатай
@@ -438,6 +442,132 @@ function cleanReasoning(text) {
     return text.replace(/[\uAC00-\uD7AF\u4E00-\u9FFF\u3040-\u30FF]+/g, '').replace(/\s+/g, ' ').trim();
   }
   return text;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ── NEW: independent image/voice classification + deterministic merge ──
+// The point: image and voice/text are now classified in TWO SEPARATE
+// Groq calls, each blind to the other. Neither can dilute the other's
+// judgment inside one shared prompt. The two results are then combined
+// here, in plain code, with a fixed rule — never left to an LLM's own
+// judgment call about who "wins" when they disagree.
+// ═══════════════════════════════════════════════════════════════════════
+
+const SEVERITY_RANK = { low: 1, medium: 2, high: 3, critical: 4 };
+function severityRank(s) { return SEVERITY_RANK[s] || 0; }
+
+// Hard keyword floor — independent of what any LLM decides. If the
+// transcript contains clear high-danger language, severity is never
+// allowed to fall below "high", no matter what the model output was.
+const CRITICAL_KEYWORDS = [
+  "гал",             // fire
+  "тэсрэ",           // explo(sion/de)
+  "цахилгаан цохи",  // electric shock
+  "нурсан",          // collapsed
+  "нуран",           // collapsing
+  "цус",             // blood
+  "ухаангүй",        // unconscious
+  "амьсгал",         // breathing (difficulty)
+  "гарч чадахгүй",   // "can't get out" / trapped
+  "хоргодох",        // trapped/stuck
+  "яаралтай тусла",  // "help urgently"
+];
+
+function hasCriticalKeyword(text) {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return CRITICAL_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+// Forces severity up to at least "high" if the transcript contains
+// unambiguous danger language the model may have underrated.
+function applyKeywordFloor(result, transcript) {
+  if (hasCriticalKeyword(transcript) && severityRank(result.severity) < severityRank("high")) {
+    console.warn("[Classification] Critical keyword detected in transcript — flooring severity to 'high'");
+    return {
+      ...result,
+      is_hazard: true,
+      severity: "high",
+      reasoning: `${result.reasoning} [Автомат анхааруулга: дуут мэдэгдэлд аюултай түлхүүр үг илэрсэн тул түвшинг өсгөв.]`,
+      severityFloored: true,
+    };
+  }
+  return result;
+}
+
+// Merges an image-only result and a voice/text-only result into one
+// final classification. Either argument can be null if that modality
+// wasn't sent.
+function mergeClassifications(imageResult, voiceResult, transcript) {
+  if (imageResult && !voiceResult) return applyKeywordFloor(imageResult, transcript);
+  if (voiceResult && !imageResult) return applyKeywordFloor(voiceResult, transcript);
+  if (!imageResult && !voiceResult) {
+    return { is_hazard: false, type: "other", severity: "low", reasoning: "Мэдээлэл ирээгүй.", confidence: 0 };
+  }
+
+  const imgRank = severityRank(imageResult.severity);
+  const voiceRank = severityRank(voiceResult.severity);
+  const conflicted =
+    imageResult.is_hazard !== voiceResult.is_hazard ||
+    Math.abs(imgRank - voiceRank) >= 2;
+
+  // Deterministic rule: highest severity wins. Ties broken by is_hazard=true.
+  let winner;
+  if (imgRank !== voiceRank) {
+    winner = imgRank > voiceRank ? imageResult : voiceResult;
+  } else {
+    winner = imageResult.is_hazard ? imageResult : voiceResult;
+  }
+
+  const merged = {
+    is_hazard: imageResult.is_hazard || voiceResult.is_hazard,
+    type: winner.type,
+    severity: winner.severity,
+    confidence: Math.min(imageResult.confidence ?? 1, voiceResult.confidence ?? 1),
+    reasoning: conflicted
+      ? `[Зураг] ${imageResult.reasoning} [Дуу/бичвэр] ${voiceResult.reasoning} — Анхаар: эх сурвалжууд зөрж байгаа тул илүү өндөр эрсдэлийг сонгов.`
+      : `[Зураг] ${imageResult.reasoning} [Дуу/бичвэр] ${voiceResult.reasoning}`,
+    sourcesConflicted: conflicted,
+  };
+
+  return applyKeywordFloor(merged, transcript);
+}
+
+async function classifyImageOnly(photoFile, schemaProps) {
+  const base64Image = photoFile.buffer.toString("base64");
+  const mimeType = photoFile.mimetype;
+  const promptText = `${SYSTEM_PROMPT}\n\nЗөвхөн зургийг үндэслэн дүгнэлт гарга (дуут мэдэгдэл байхгүй гэж үзэж дүгнэ).\n\nЗөвхөн JSON форматаар хариул:\n${JSON.stringify(schemaProps)}`;
+
+  const response = await groq.chat.completions.create({
+    model: "meta-llama/llama-4-scout-17b-16e-instruct",
+    messages: [{
+      role: "user",
+      content: [
+        { type: "text", text: promptText },
+        { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } },
+      ],
+    }],
+    response_format: { type: "json_object" },
+    temperature: 0.2,
+  });
+  const result = JSON.parse(response.choices[0].message.content);
+  result.reasoning = cleanReasoning(result.reasoning);
+  console.log("[Classification - image only]", result);
+  return result;
+}
+
+async function classifyVoiceOnly(transcript, schemaProps) {
+  const promptText = `${SYSTEM_PROMPT}\n\nЗураг алга. Ажилтан зөвхөн дуугаар дараах мэдэгдлийг өгсөн: "${transcript}"\n\nЗөвхөн JSON форматаар хариул:\n${JSON.stringify(schemaProps)}`;
+  const response = await groq.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    messages: [{ role: "user", content: promptText }],
+    response_format: { type: "json_object" },
+    temperature: 0.2,
+  });
+  const result = JSON.parse(response.choices[0].message.content);
+  result.reasoning = cleanReasoning(result.reasoning);
+  console.log("[Classification - voice only]", result);
+  return result;
 }
 
 // ─── In-memory draft store ───────────────────────────────────────────────────
@@ -624,11 +754,6 @@ app.post("/api/classify", upload, handleUploadError, async (req, res) => {
       }
     }
 
-    let result = {
-      is_hazard: false, type: "other", severity: "low",
-      reasoning: "Мэдээлэл ирээгүй.", confidence: 0,
-    };
-
     const schemaProps = {
       is_hazard:  { type: "boolean" },
       type:       { type: "string", enum: HAZARD_TYPES },
@@ -637,42 +762,23 @@ app.post("/api/classify", upload, handleUploadError, async (req, res) => {
       confidence: { type: "number" },
     };
 
+    // ── Independent classification: image and voice/text are judged
+    // separately, then merged deterministically in code. See
+    // mergeClassifications() above for the exact conflict-resolution rule.
+    let imageResult = null;
+    let voiceResult = null;
+
     if (photoFile) {
-      const base64Image = photoFile.buffer.toString("base64");
-      const mimeType = photoFile.mimetype;
-      const promptText = transcript
-        ? `${SYSTEM_PROMPT}\n\nАжилтны дуут мэдэгдэл: "${transcript}"\nЭнэ мэдээллийг зурагтай хослуулан ашиглаж дүгнэлт гарга.\n\nЗөвхөн JSON форматаар хариул:\n${JSON.stringify(schemaProps)}`
-        : `${SYSTEM_PROMPT}\n\nЗөвхөн JSON форматаар хариул:\n${JSON.stringify(schemaProps)}`;
+      imageResult = await classifyImageOnly(photoFile, schemaProps);
+    }
+    if (transcript) {
+      voiceResult = await classifyVoiceOnly(transcript, schemaProps);
+    }
 
-      const response = await groq.chat.completions.create({
-        model: "meta-llama/llama-4-scout-17b-16e-instruct",
-        messages: [{
-          role: "user",
-          content: [
-            { type: "text", text: promptText },
-            { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } },
-          ],
-        }],
-        response_format: { type: "json_object" },
-        temperature: 0.2,
-      });
-      result = JSON.parse(response.choices[0].message.content);
-      // ── Fix Korean/CJK contamination ──
-      result.reasoning = cleanReasoning(result.reasoning);
-      console.log("[Classification - image]", result);
+    const result = mergeClassifications(imageResult, voiceResult, transcript);
 
-    } else if (transcript) {
-      const promptText = `${SYSTEM_PROMPT}\n\nЗураг алга. Ажилтан зөвхөн дуугаар дараах мэдэгдлийг өгсөн: "${transcript}"\n\nЗөвхөн JSON форматаар хариул:\n${JSON.stringify(schemaProps)}`;
-      const response = await groq.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
-        messages: [{ role: "user", content: promptText }],
-        response_format: { type: "json_object" },
-        temperature: 0.2,
-      });
-      result = JSON.parse(response.choices[0].message.content);
-      // ── Fix Korean/CJK contamination ──
-      result.reasoning = cleanReasoning(result.reasoning);
-      console.log("[Classification - voice only]", result);
+    if (result.sourcesConflicted) {
+      console.warn("[Classification] Sources conflicted — resolved to higher severity:", result);
     }
 
     // Keep the raw buffers (photo AND audio) in the draft so /api/confirm
@@ -701,6 +807,7 @@ app.post("/api/classify", upload, handleUploadError, async (req, res) => {
       severity: result.severity,
       reasoning: result.reasoning,
       confidence: result.confidence,
+      sourcesConflicted: !!result.sourcesConflicted,
       transcript,
       tsekh,
     });
@@ -779,6 +886,7 @@ app.post("/api/confirm", async (req, res) => {
       smsNumbers,
       smsFailed,
       wasEdited,
+      sourcesConflicted: !!draft.aiResult.sourcesConflicted,
       aiOriginal: { type: draft.aiResult.type, severity: draft.aiResult.severity },
       reporterPhone: draft.reporterPhone || "",
       reporterName:  draft.reporterName || "",
@@ -813,6 +921,7 @@ app.post("/api/confirm", async (req, res) => {
       smsNumbers,
       smsFailed,
       wasEdited,
+      sourcesConflicted: !!draft.aiResult.sourcesConflicted,
       photoUrl: photoMediaId ? `/api/media/photo/${photoMediaId}?requesterId=${draft.reporterEmployeeId || ""}` : null,
       audioUrl: audioMediaId ? `/api/media/audio/${audioMediaId}?requesterId=${draft.reporterEmployeeId || ""}` : null,
       createdAt: report.createdAt,

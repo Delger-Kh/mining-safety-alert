@@ -155,7 +155,8 @@ Future<File?> mergeWavChunks(List<String> chunkPaths, String outputPath) async {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// SCREEN 1: Capture — now with LIVE captions while recording
+// SCREEN 1: Capture — now with LIVE captions while recording, PLUS the
+// employee can type/edit the transcript by hand at any time.
 // ════════════════════════════════════════════════════════════════════
 class HazardReportPage extends StatefulWidget {
   final AppUser currentUser;
@@ -174,7 +175,11 @@ class _HazardReportPageState extends State<HazardReportPage> {
   bool _isRecording = false;
   String? _finalAudioPath;     // merged, final WAV for the whole recording — this is what gets uploaded
   final List<String> _chunkPaths = []; // every chunk recorded this session, in order, kept until merged
-  String _liveTranscript = ''; // grows as chunks come back
+
+  // Transcript is now backed by a TextEditingController so the employee
+  // can type or edit it by hand, in addition to it being auto-filled by
+  // live voice transcription while recording.
+  final TextEditingController _transcriptController = TextEditingController();
   bool _isTranscribingChunk = false;
   bool _isMergingAudio = false;
 
@@ -196,6 +201,11 @@ class _HazardReportPageState extends State<HazardReportPage> {
   void initState() {
     super.initState();
     _loadTsekhList();
+    // Rebuild on every keystroke so the submit button enables/disables
+    // correctly as the employee types into the transcript field.
+    _transcriptController.addListener(() {
+      setState(() {});
+    });
     // Employees default to their own цех so they don't have to pick it every time.
     if (widget.currentUser.tsekh.isNotEmpty) {
       _selectedTsekh = widget.currentUser.tsekh;
@@ -220,6 +230,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
   void dispose() {
     _chunkTimer?.cancel();
     _recorder.dispose();
+    _transcriptController.dispose();
     super.dispose();
   }
 
@@ -257,7 +268,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
   // finishes, immediately start the next one (so there's no gap the
   // worker would notice), and send the just-finished chunk to the
   // backend for transcription. Append the returned text to the
-  // growing _liveTranscript as it comes back.
+  // growing transcript field as it comes back.
   //
   // IMPORTANT: unlike before, chunk files are now KEPT (not deleted)
   // until recording stops, at which point they're merged into one
@@ -278,11 +289,13 @@ class _HazardReportPageState extends State<HazardReportPage> {
 
     setState(() {
       _isRecording = true;
-      _liveTranscript = '';
       _finalAudioPath = null;
       _chunkPaths.clear();
       _errorMessage = null;
       _chunkCounter = 0;
+      // Note: we intentionally do NOT clear _transcriptController here —
+      // if the employee already typed something by hand, recording will
+      // simply append onto it, rather than wiping out what they wrote.
     });
 
     await _recordNextChunk();
@@ -335,9 +348,12 @@ class _HazardReportPageState extends State<HazardReportPage> {
         final decoded = jsonDecode(response.body) as Map<String, dynamic>;
         final text = (decoded['text'] as String?) ?? '';
         if (text.isNotEmpty && mounted) {
-          setState(() {
-            _liveTranscript = _liveTranscript.isEmpty ? text : '$_liveTranscript $text';
-          });
+          final current = _transcriptController.text;
+          final updated = current.isEmpty ? text : '$current $text';
+          _transcriptController.value = _transcriptController.value.copyWith(
+            text: updated,
+            selection: TextSelection.collapsed(offset: updated.length),
+          );
         }
       }
     } catch (_) {
@@ -399,7 +415,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
       _deleteFileQuietly(p);
     }
     setState(() {
-      _liveTranscript = '';
+      _transcriptController.clear();
       _finalAudioPath = null;
       _chunkPaths.clear();
     });
@@ -407,7 +423,8 @@ class _HazardReportPageState extends State<HazardReportPage> {
 
   // ── Classify and go to review screen ──────────────────────────────
   Future<void> _classifyAndReview() async {
-    if (_selectedImage == null && _liveTranscript.trim().isEmpty) return;
+    final transcriptText = _transcriptController.text.trim();
+    if (_selectedImage == null && transcriptText.isEmpty) return;
     if (_selectedTsekh == null) {
       setState(() => _errorMessage = 'Цехийг сонгоно уу.');
       return;
@@ -419,7 +436,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
       final uri = Uri.parse('$backendBase/api/classify');
       final request = http.MultipartRequest('POST', uri);
       request.fields['tsekh'] = _selectedTsekh!;
-      request.fields['transcript'] = _liveTranscript.trim();
+      request.fields['transcript'] = transcriptText;
       request.fields['reporterPhone'] = widget.currentUser.phone;
       request.fields['reporterName'] = widget.currentUser.name;
       request.fields['reporterEmployeeId'] = widget.currentUser.employeeId;
@@ -457,7 +474,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
           await _deleteFileQuietly(_finalAudioPath);
           setState(() {
             _selectedImage = null;
-            _liveTranscript = '';
+            _transcriptController.clear();
             _finalAudioPath = null;
             _selectedTsekh = null;
           });
@@ -474,7 +491,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
 
   @override
   Widget build(BuildContext context) {
-    final hasVoice = _liveTranscript.trim().isNotEmpty;
+    final hasVoice = _transcriptController.text.trim().isNotEmpty;
     final canSubmit = (_selectedImage != null || hasVoice) && !_isSubmitting && !_isRecording && !_isMergingAudio;
 
     return Scaffold(
@@ -597,47 +614,64 @@ class _HazardReportPageState extends State<HazardReportPage> {
             ]),
             const SizedBox(height: 20),
 
-            const Text('Дуут мэдэгдэл (заавал биш)', style: TextStyle(fontWeight: FontWeight.w600)),
+            const Text('Дуут мэдэгдэл / бичвэр (заавал биш)', style: TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 4),
+            Text(
+              'Дуугаар ярьж болно, эсвэл доор шууд бичиж болно.',
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
             const SizedBox(height: 8),
 
-            // ── LIVE CAPTION BOX ──
+            // ── TRANSCRIPT BOX — now a real, editable text field ──
+            // While recording, this fills in automatically from live
+            // speech-to-text. At any other time (or even at the same
+            // time), the employee can tap in and type/edit it by hand.
             Container(
               width: double.infinity,
-              constraints: const BoxConstraints(minHeight: 90),
-              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: _isRecording ? Colors.red[50] : Colors.grey[100],
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: _isRecording ? Colors.red[300]! : Colors.grey[300]!),
               ),
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (_isRecording)
-                    Row(children: [
-                      const Icon(Icons.fiber_manual_record, color: Colors.red, size: 12),
-                      const SizedBox(width: 6),
-                      const Text('Бичиж байна...', style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.w600)),
-                      if (_isTranscribingChunk) ...[
-                        const SizedBox(width: 8),
-                        const SizedBox(height: 10, width: 10, child: CircularProgressIndicator(strokeWidth: 1.5)),
-                      ],
-                    ]),
-                  if (_isMergingAudio)
-                    Row(children: [
-                      const SizedBox(height: 10, width: 10, child: CircularProgressIndicator(strokeWidth: 1.5)),
-                      const SizedBox(width: 8),
-                      Text('Бичлэгийг нэгтгэж байна...', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-                    ]),
-                  if (_isRecording || _isMergingAudio) const SizedBox(height: 6),
-                  Text(
-                    _liveTranscript.isEmpty
-                        ? (_isRecording ? 'Ярьж эхэлнэ үү...' : 'Бичлэг хийгээгүй байна')
-                        : _liveTranscript,
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: _liveTranscript.isEmpty ? Colors.grey[500] : Colors.black87,
-                      height: 1.4,
+                  if (_isRecording || _isMergingAudio)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+                      child: Row(children: [
+                        if (_isRecording) ...[
+                          const Icon(Icons.fiber_manual_record, color: Colors.red, size: 12),
+                          const SizedBox(width: 6),
+                          const Text('Бичиж байна...', style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.w600)),
+                          if (_isTranscribingChunk) ...[
+                            const SizedBox(width: 8),
+                            const SizedBox(height: 10, width: 10, child: CircularProgressIndicator(strokeWidth: 1.5)),
+                          ],
+                        ],
+                        if (_isMergingAudio) ...[
+                          const SizedBox(height: 10, width: 10, child: CircularProgressIndicator(strokeWidth: 1.5)),
+                          const SizedBox(width: 8),
+                          Text('Бичлэгийг нэгтгэж байна...', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+                        ],
+                      ]),
+                    ),
+                  TextField(
+                    controller: _transcriptController,
+                    maxLines: null,
+                    minLines: 3,
+                    enabled: !_isSubmitting,
+                    // Read-only while actively recording, so the live
+                    // captions aren't fought over by simultaneous typing.
+                    // As soon as recording stops, it's freely editable.
+                    readOnly: _isRecording,
+                    style: const TextStyle(fontSize: 15, height: 1.4, color: Colors.black87),
+                    decoration: InputDecoration(
+                      border: InputBorder.none,
+                      contentPadding: const EdgeInsets.all(8),
+                      hintText: _isRecording ? 'Ярьж эхэлнэ үү...' : 'Энд бичих эсвэл дуугаар ярих...',
+                      hintStyle: TextStyle(color: Colors.grey[500]),
                     ),
                   ),
                 ],

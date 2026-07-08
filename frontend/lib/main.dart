@@ -582,7 +582,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
             ),
             const SizedBox(height: 20),
 
-            const Text('Зураг (заавал биш)', style: TextStyle(fontWeight: FontWeight.w600)),
+            const Text('Зураг ', style: TextStyle(fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             Container(
               height: 200,
@@ -614,10 +614,10 @@ class _HazardReportPageState extends State<HazardReportPage> {
             ]),
             const SizedBox(height: 20),
 
-            const Text('Дуут мэдэгдэл / бичвэр (заавал биш)', style: TextStyle(fontWeight: FontWeight.w600)),
+            const Text('Яриа / тайлбар ', style: TextStyle(fontWeight: FontWeight.w600)),
             const SizedBox(height: 4),
             Text(
-              'Дуугаар ярьж болно, эсвэл доор шууд бичиж болно.',
+              'Яриа / тайлбар аль алиныг нь ашиглаж болно. Яриа бичлэгийг эхлүүлэхийн тулд микрофон товчийг дарна уу.',
               style: TextStyle(fontSize: 12, color: Colors.grey[600]),
             ),
             const SizedBox(height: 8),
@@ -670,7 +670,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
                     decoration: InputDecoration(
                       border: InputBorder.none,
                       contentPadding: const EdgeInsets.all(8),
-                      hintText: _isRecording ? 'Ярьж эхэлнэ үү...' : 'Энд бичих эсвэл дуугаар ярих...',
+                      hintText: _isRecording ? 'Ярьж эхэлнэ үү...' : '',
                       hintStyle: TextStyle(color: Colors.grey[500]),
                     ),
                   ),
@@ -683,7 +683,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
               Expanded(child: ElevatedButton.icon(
                 onPressed: (_isSubmitting || _isMergingAudio) ? null : (_isRecording ? _stopRecording : _startRecording),
                 icon: Icon(_isRecording ? Icons.stop : Icons.mic),
-                label: Text(_isRecording ? 'Зогсоох' : 'Бичлэг эхлэх'),
+                label: Text(_isRecording ? 'Зогсоох' : 'Яриа бичиж эхлэх'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _isRecording ? Colors.red : null,
                   foregroundColor: _isRecording ? Colors.white : null,

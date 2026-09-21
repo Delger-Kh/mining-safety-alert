@@ -166,7 +166,7 @@ class HazardReportPage extends StatefulWidget {
 }
 
 class _HazardReportPageState extends State<HazardReportPage> {
-  static const String backendBase = 'http://192.168.1.108:3000'; // CHANGE to your laptop's IP
+  static const String backendBase = 'http://192.168.1.73:3000'; // CHANGE to your laptop's IP
 
   File? _selectedImage;
   final ImagePicker _picker = ImagePicker();
@@ -779,8 +779,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
         final result = jsonDecode(res.body) as Map<String, dynamic>;
         if (!mounted) return;
 
-        final alerted = result['alerted'] == true;
-        final smsCount = (result['smsNumbers'] as List?)?.length ?? 0;
+        final alerted = result['smsSent'] == true;
+        final attempted = result['smsAttempted'] == true;
+        final smsCount = ((result['smsDetails']?['sent']) as List?)?.length ?? 0;
 
         await showDialog(
           context: context,

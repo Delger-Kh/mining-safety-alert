@@ -365,19 +365,23 @@ function cleanReasoning(text) {
 const SEVERITY_RANK = { low: 1, medium: 2, high: 3, critical: 4 };
 function severityRank(s) { return SEVERITY_RANK[s] || 0; }
 
-const CRITICAL_KEYWORDS = ["гал", "тэсрэ", "цахилгаан цохи", "нурсан", "нуран", "цус", "ухаангүй", "амьсгал", "гарч чадахгүй", "хоргодох", "яаралтай тусла"];
+const CRITICAL_KEYWORDS = [
+  "гал", "тэсрэ", "цахилгаан цохи", "нурсан", "нуран", "цус", "ухаангүй",
+  "амьсгал", "гарч чадахгүй", "хоргодох", "яаралтай тусла",
+  "унасан", "унаж", "шархадсан", "шарх", "гэмтсэн", "гэмтэл",
+  "өвдөж", "өвдсөн", "хөдөлж чадахгүй", "тусламж хэрэгтэй",
+];
 
 function applyKeywordFloor(result, transcript) {
-  if (!transcript) return result;
-  const lower = transcript.toLowerCase();
-  const hasKeyword = CRITICAL_KEYWORDS.some((kw) => lower.includes(kw));
-  
+  const textToScan = [transcript, result.reasoning].filter(Boolean).join(" ").toLowerCase();
+  const hasKeyword = CRITICAL_KEYWORDS.some((kw) => textToScan.includes(kw));
+
   if (hasKeyword && severityRank(result.severity) < severityRank("high")) {
     return {
       ...result,
       is_hazard: true,
       severity: "high",
-      reasoning: `${result.reasoning} [Автомат анхааруулга: дуут мэдэгдэлд аюултай түлхүүр үг илэрсэн тул түвшинг өсгөв.]`,
+      reasoning: `${result.reasoning} [Автомат анхааруулга: аюултай нөхцөл илэрсэн тул түвшинг өсгөв.]`,
     };
   }
   return result;
@@ -413,19 +417,21 @@ function mergeClassifications(imageResult, voiceResult, transcript) {
 async function classifyImageOnly(photoFile, schemaProps) {
   const base64Image = photoFile.buffer.toString("base64");
   const promptText = `${SYSTEM_PROMPT}\n\nЗөвхөн зургийг үндэслэн дүгнэлт гарга. JSON-оор хариул:\n${JSON.stringify(schemaProps)}`;
+const response = await groq.chat.completions.create({
+ model: "qwen/qwen3.8-27b",
+  messages: [{
+    role: "user",
+    content: [
+      { type: "text", text: promptText },
+      { type: "image_url", image_url: { url: `data:${photoFile.mimetype};base64,${base64Image}` } },
+    ],
+  }],
+  response_format: { type: "json_object" },
+  temperature: 0.2,
+  max_completion_tokens: 500,
+  reasoning_effort: "none",
+});
 
-  const response = await groq.chat.completions.create({
-    model: "meta-llama/llama-4-scout-17b-16e-instruct",
-    messages: [{
-      role: "user",
-      content: [
-        { type: "text", text: promptText },
-        { type: "image_url", image_url: { url: `data:${photoFile.mimetype};base64,${base64Image}` } },
-      ],
-    }],
-    response_format: { type: "json_object" },
-    temperature: 0.2,
-  });
   const result = JSON.parse(response.choices[0].message.content);
   result.reasoning = cleanReasoning(result.reasoning);
   return result;
@@ -434,10 +440,10 @@ async function classifyImageOnly(photoFile, schemaProps) {
 async function classifyVoiceOnly(transcript, schemaProps) {
   const promptText = `${SYSTEM_PROMPT}\n\nАжилтан зөвхөн дуугаар мэдэгдсэн: "${transcript}". JSON-оор хариул:\n${JSON.stringify(schemaProps)}`;
   const response = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
-    messages: [{ role: "user", content: promptText }],
-    response_format: { type: "json_object" },
-    temperature: 0.2,
+   model: "openai/gpt-oss-120b",
+  messages: [{ role: "user", content: promptText }],
+  response_format: { type: "json_object" },
+  temperature: 0.2,
   });
   const result = JSON.parse(response.choices[0].message.content);
   result.reasoning = cleanReasoning(result.reasoning);
@@ -671,8 +677,7 @@ app.post("/api/confirm", async (req, res) => {
     await createNotifications(targetUsers, newReport._id, newReport.tsekh, newReport.severity, HAZARD_TYPE_MN[newReport.type] || newReport.type);
     drafts.delete(draftId);
 
-    res.json({ success: true, reportId: newReport._id, smsSent: newReport.alerted, smsDetails: smsStatus });
-  } catch (err) {
+    res.json({ success: true, reportId: newReport._id, smsSent: newReport.alerted, smsAttempted: shouldSendSms, smsDetails: smsStatus });  } catch (err) {
     console.error("Error in /api/confirm:", err);
     res.status(500).json({ error: "Баталгаажуулахад алдаа гарлаа." });
   }

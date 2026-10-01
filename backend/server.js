@@ -3,11 +3,9 @@ const express = require("express");
 const multer = require("multer");
 const cors = require("cors");
 const Groq = require("groq-sdk");
-const mongoose = require("mongoose");
-const { GridFSBucket, ObjectId } = require("mongodb");
 const twilio = require("twilio");
 const crypto = require("crypto");
-const { Readable } = require("stream");
+const store = require("./store");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,143 +13,18 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// ─── MongoDB Холболт ────────────────────────────────────────────────────────
-mongoose.set("strictQuery", true);
+// ─── Өгөгдлийн сан ───────────────────────────────────────────────────────────
+// MongoDB байхгүй/тасарсан үед сервер унахгүй — store.js локал файл руу шилжиж,
+// MongoDB эргэж холбогдоход өгөгдлийг автоматаар синк хийнэ.
+store.connectMongo();
 
-const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/mine_safety";
-
-let photoBucket, audioBucket;
-
-mongoose.connect(MONGO_URI)
-  .then(() => {
-    console.log("[DB] Connected to MongoDB:", MONGO_URI);
-    const db = mongoose.connection.db;
-    photoBucket = new GridFSBucket(db, { bucketName: "photos" });
-    audioBucket = new GridFSBucket(db, { bucketName: "audio" });
-  })
-  .catch((err) => { 
-    console.error("[DB] Connection failed:", err.message); 
-    process.exit(1); 
-  });
-
-// ─── GridFS Туслах Функцууд ──────────────────────────────────────────────────
-function uploadBufferToBucket(bucket, buffer, filename, mimeType, metadata) {
-  return new Promise((resolve, reject) => {
-    const uploadStream = bucket.openUploadStream(filename || "file", {
-      contentType: mimeType || "application/octet-stream",
-      metadata: metadata || {},
-    });
-    Readable.from(buffer).pipe(uploadStream)
-      .on("error", reject)
-      .on("finish", () => resolve(uploadStream.id));
-  });
-}
-
-async function streamFileToResponse(bucket, id, res) {
-  let _id;
-  try {
-    _id = new ObjectId(id);
-  } catch {
-    return res.status(400).json({ error: "Буруу ID." });
-  }
-  const files = await bucket.find({ _id }).toArray();
-  if (files.length === 0) return res.status(404).json({ error: "Файл олдсонгүй." });
-
-  const file = files[0];
+async function streamMediaToResponse(kind, id, res) {
+  const file = await store.getMedia(kind, id);
+  if (!file) return res.status(404).json({ error: "Файл олдсонгүй." });
   res.set("Content-Type", file.contentType || "application/octet-stream");
-  res.set("Content-Length", file.length);
-  bucket.openDownloadStream(_id)
-    .on("error", () => res.status(404).end())
-    .pipe(res);
+  if (file.length != null) res.set("Content-Length", file.length);
+  file.stream.on("error", () => res.status(404).end()).pipe(res);
 }
-
-async function linkMediaToReport(bucketName, mediaId, reportId) {
-  if (!mediaId) return;
-  await mongoose.connection.db.collection(`${bucketName}.files`).updateOne(
-    { _id: mediaId },
-    { $set: { "metadata.reportId": reportId } }
-  );
-}
-
-async function deleteMediaIfExists(bucket, mediaId) {
-  if (!mediaId) return;
-  try {
-    await bucket.delete(mediaId);
-  } catch (err) {
-    console.warn(`[Media] Could not delete ${mediaId}:`, err.message);
-  }
-}
-
-// ─── Схемүүд (Schemas & Indexes) ─────────────────────────────────────────────
-const reportSchema = new mongoose.Schema({
-  photoMediaId: { type: mongoose.Schema.Types.ObjectId, default: null, ref: "photos.files" },
-  audioMediaId: { type: mongoose.Schema.Types.ObjectId, default: null, ref: "audio.files" },
-  filename:   { type: String },
-  mimeType:   { type: String },
-  sizeBytes:  { type: Number },
-  is_hazard:  { type: Boolean, required: true },
-  type: {
-    type: String,
-    enum: ["structural","electrical","fire_explosion","chemical_gas","equipment","fall_slip","ppe_violation","vehicle_traffic","other",""],
-    default: "",
-  },
-  severity: {
-    type: String,
-    enum: ["low","medium","high","critical",""],
-    default: "",
-    index: true,
-  },
-  reasoning:  { type: String },
-  confidence: { type: Number },
-  transcript: { type: String, default: "" },
-  tsekh:      { type: String, default: "", index: true },
-  alerted:    { type: Boolean, default: false, index: true },
-  smsNumbers: [{ type: String }],
-  smsFailed:  [{ type: String }],
-  wasEdited:  { type: Boolean, default: false },
-  isTestData: { type: Boolean, default: false },
-  sourcesConflicted: { type: Boolean, default: false },
-  aiOriginal: {
-    type:     { type: String },
-    severity: { type: String },
-  },
-  reporterPhone:      { type: String, default: "" },
-  reporterName:       { type: String, default: "" },
-  reporterEmployeeId: { type: String, default: "", index: true },
-  createdAt:  { type: Date, default: Date.now },
-}, {
-  timestamps: { createdAt: "createdAt", updatedAt: "updatedAt" },
-  versionKey: false,
-  collection: "reports",
-});
-
-reportSchema.index({ tsekh: 1, createdAt: -1 });
-reportSchema.index({ reporterEmployeeId: 1, createdAt: -1 });
-reportSchema.index({ alerted: 1, tsekh: 1, createdAt: -1 });
-reportSchema.index({ isTestData: 1, createdAt: -1 });
-
-const Report = mongoose.model("Report", reportSchema);
-
-const userSchema = new mongoose.Schema({
-  name:       { type: String, default: "" },
-  employeeId: {
-    type: String,
-    required: true,
-    unique: true,
-    match: [/^\d{5}$/, "Бүртгэлийн дугаар 5 оронтой тоо байх ёстой."],
-  },
-  phone:      { type: String, required: true },
-  role:       { type: String, enum: ["ажилтан", "tsekh_darga", "hub_darga"], default: "ажилтан", index: true },
-  tsekh:      { type: String, default: "", index: true },
-  createdAt:  { type: Date, default: Date.now },
-}, {
-  timestamps: { createdAt: "createdAt", updatedAt: "updatedAt" },
-  versionKey: false,
-  collection: "users",
-});
-
-userSchema.index({ role: 1, tsekh: 1 });
-const User = mongoose.model("User", userSchema);
 
 const ROLE_MN = {
   "ажилтан":     "Ажилтан",
@@ -161,31 +34,12 @@ const ROLE_MN = {
 
 async function canAccessReport(report, requesterEmployeeId) {
   if (!report || !requesterEmployeeId) return false;
-  const user = await User.findOne({ employeeId: requesterEmployeeId });
+  const user = await store.findUserByEmployeeId(requesterEmployeeId);
   if (!user) return false;
   if (user.role === "hub_darga") return true;
   if (user.role === "tsekh_darga") return user.tsekh === report.tsekh;
   return report.reporterEmployeeId === requesterEmployeeId;
 }
-
-const notificationSchema = new mongoose.Schema({
-  recipientPhone: { type: String, required: true, index: true },
-  reportId:       { type: mongoose.Schema.Types.ObjectId, ref: "Report" },
-  tsekh:          { type: String, default: "" },
-  severity:       { type: String, default: "" },
-  message:        { type: String, default: "" },
-  read:           { type: Boolean, default: false },
-  createdAt:      { type: Date, default: Date.now },
-}, {
-  timestamps: { createdAt: "createdAt", updatedAt: "updatedAt" },
-  versionKey: false,
-  collection: "notifications",
-});
-
-notificationSchema.index({ recipientPhone: 1, createdAt: -1 });
-notificationSchema.index({ recipientPhone: 1, read: 1 });
-
-const Notification = mongoose.model("Notification", notificationSchema);
 
 // ─── Цехийн холбоо барих мэдээлэл (Fallback) ───────────────────────────────────
 const MY_TEST_NUMBER = "+97680509572";
@@ -203,8 +57,8 @@ const TSEKH_CONTACTS = {
 
 async function getResponsibleUsers(tsekh) {
   const [hubDargas, tsekhDargas] = await Promise.all([
-    User.find({ role: "hub_darga" }),
-    User.find({ role: "tsekh_darga", tsekh }),
+    store.findUsers({ role: "hub_darga" }),
+    store.findUsers({ role: "tsekh_darga", tsekh }),
   ]);
   const users = [...hubDargas, ...tsekhDargas];
   if (users.length === 0) {
@@ -265,7 +119,7 @@ async function createNotifications(users, reportId, tsekh, severity, hazardType)
       message,
     }));
   if (docs.length > 0) {
-    await Notification.insertMany(docs);
+    await store.insertNotifications(docs);
   }
 }
 
@@ -289,11 +143,9 @@ async function transcribeWithChimege(wavBuffer) {
 }
 
 // ─── Groq SDK Тохиргоо ────────────────────────────────────────────────────────
-if (!process.env.GROQ_API_KEY) {
-  console.error("\n[ERROR] GROQ_API_KEY is not set.\n");
-  process.exit(1);
-}
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+// GROQ_API_KEY байхгүй ч сервер асна (нэвтрэх, түүх гэх мэт ажиллана); зөвхөн /api/classify 503 буцаана.
+const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
+if (!groq) console.error("\n[WARN] GROQ_API_KEY is not set — AI classification is disabled.\n");
 
 // ─── Multer Файл Хяналт ──────────────────────────────────────────────────────
 const upload = multer({ 
@@ -464,16 +316,19 @@ function saveDraft(data) {
 // ─── API Эндпойнтууд (API Endpoints) ──────────────────────────────────────────
 app.get("/", (req, res) => res.send("Mine Safety Backend is running."));
 
+// Сервер болон өгөгдлийн сангийн төлөв (mode: "mongodb" | "local")
+app.get("/api/health", (req, res) => res.json({ ok: true, db: store.status() }));
+
 app.get("/api/tsekh", (req, res) => res.json(Object.keys(TSEKH_CONTACTS)));
 
 app.get("/api/media/photo/:id", async (req, res) => {
   try {
     const requesterId = req.query.requesterId || "";
-    const report = await Report.findOne({ photoMediaId: req.params.id });
+    const report = await store.findReportByMedia("photoMediaId", req.params.id);
     if (!report) return res.status(404).json({ error: "Файл олдсонгүй." });
     if (!(await canAccessReport(report, requesterId))) return res.status(403).json({ error: "Хандах эрхгүй." });
 
-    await streamFileToResponse(photoBucket, req.params.id, res);
+    await streamMediaToResponse("photos", req.params.id, res);
   } catch (err) {
     res.status(500).json({ error: "Зураг татахад алдаа гарлаа" });
   }
@@ -482,11 +337,11 @@ app.get("/api/media/photo/:id", async (req, res) => {
 app.get("/api/media/audio/:id", async (req, res) => {
   try {
     const requesterId = req.query.requesterId || "";
-    const report = await Report.findOne({ audioMediaId: req.params.id });
+    const report = await store.findReportByMedia("audioMediaId", req.params.id);
     if (!report) return res.status(404).json({ error: "Файл олдсонгүй." });
     if (!(await canAccessReport(report, requesterId))) return res.status(403).json({ error: "Хандах эрхгүй." });
 
-    await streamFileToResponse(audioBucket, req.params.id, res);
+    await streamMediaToResponse("audio", req.params.id, res);
   } catch (err) {
     res.status(500).json({ error: "Дуу татахад алдаа гарлаа" });
   }
@@ -501,10 +356,16 @@ app.post("/api/register", async (req, res) => {
     if (!["ажилтан", "tsekh_darga", "hub_darga"].includes(role)) return res.status(400).json({ error: "Албан тушаал буруу байна." });
     if (role !== "hub_darga" && !tsekh) return res.status(400).json({ error: "Цехээ сонгоно уу." });
 
-    const existing = await User.findOne({ employeeId });
+    const existing = await store.findUserByEmployeeId(employeeId);
     if (existing) return res.status(409).json({ error: "Энэ ажилтны дугаар бүртгэгдсэн байна." });
 
-    const user = await User.create({ name, employeeId, phone, role, tsekh: tsekh || "" });
+    let user;
+    try {
+      user = await store.createUser({ name, employeeId, phone, role, tsekh: tsekh || "" });
+    } catch (err) {
+      if (err.code === 11000) return res.status(409).json({ error: "Энэ ажилтны дугаар бүртгэгдсэн байна." });
+      throw err;
+    }
     res.json({ _id: user._id, name: user.name, employeeId: user.employeeId, phone: user.phone, role: user.role, roleLabel: ROLE_MN[user.role], tsekh: user.tsekh });
   } catch (err) {
     res.status(500).json({ error: "Бүртгэхэд алдаа гарлаа", details: err.message });
@@ -516,7 +377,7 @@ app.post("/api/login", async (req, res) => {
     const { employeeId } = req.body || {};
     if (!employeeId) return res.status(400).json({ error: "Ажилтны дугаараа оруулна уу." });
 
-    const user = await User.findOne({ employeeId });
+    const user = await store.findUserByEmployeeId(employeeId);
     if (!user) return res.status(404).json({ error: "Хэрэглэгч олдсонгүй. Эхлээд бүртгүүлнэ үү." });
     res.json({ _id: user._id, name: user.name, employeeId: user.employeeId, phone: user.phone, role: user.role, roleLabel: ROLE_MN[user.role], tsekh: user.tsekh });
   } catch (err) {
@@ -526,7 +387,7 @@ app.post("/api/login", async (req, res) => {
 
 app.get("/api/notifications/:phone", async (req, res) => {
   try {
-    const notifications = await Notification.find({ recipientPhone: req.params.phone }).sort({ createdAt: -1 }).limit(100);
+    const notifications = await store.findNotifications(req.params.phone, 100);
     res.json(notifications);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch notifications" });
@@ -535,7 +396,7 @@ app.get("/api/notifications/:phone", async (req, res) => {
 
 app.post("/api/notifications/:id/read", async (req, res) => {
   try {
-    await Notification.findByIdAndUpdate(req.params.id, { read: true });
+    await store.markNotificationRead(req.params.id);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: "Failed to update notification" });
@@ -571,6 +432,7 @@ app.post("/api/classify", upload, handleUploadError, async (req, res) => {
 
     if (!photoFile && !audioFile && !providedTranscript) return res.status(400).json({ error: "Зураг эсвэл дуу илгээнэ үү." });
     if (!tsekh) return res.status(400).json({ error: "Цехийг сонгоно уу." });
+    if (!groq) return res.status(503).json({ error: "AI шинжилгээ идэвхгүй байна (GROQ_API_KEY тохируулаагүй)." });
 
     let transcript = providedTranscript;
     if (!transcript && audioFile) {
@@ -628,14 +490,14 @@ app.post("/api/confirm", async (req, res) => {
     let photoMediaId = null;
     let audioMediaId = null;
 
-    if (draft.photo && photoBucket) {
-      photoMediaId = await uploadBufferToBucket(photoBucket, draft.photo.buffer, draft.photo.originalname, draft.photo.mimetype, { reporterEmployeeId: draft.reporterEmployeeId });
+    if (draft.photo) {
+      photoMediaId = await store.saveMedia("photos", draft.photo.buffer, draft.photo.originalname, draft.photo.mimetype, { reporterEmployeeId: draft.reporterEmployeeId });
     }
-    if (draft.audio && audioBucket) {
-      audioMediaId = await uploadBufferToBucket(audioBucket, draft.audio.buffer, draft.audio.originalname, draft.audio.mimetype, { reporterEmployeeId: draft.reporterEmployeeId });
+    if (draft.audio) {
+      audioMediaId = await store.saveMedia("audio", draft.audio.buffer, draft.audio.originalname, draft.audio.mimetype, { reporterEmployeeId: draft.reporterEmployeeId });
     }
 
-    const newReport = await Report.create({
+    let newReport = await store.createReport({
       photoMediaId,
       audioMediaId,
       filename: draft.photo?.originalname || draft.audio?.originalname || "media",
@@ -657,8 +519,8 @@ app.post("/api/confirm", async (req, res) => {
       isTestData: draft.isTestData,
     });
 
-    if (photoMediaId) await linkMediaToReport("photos", photoMediaId, newReport._id);
-    if (audioMediaId) await linkMediaToReport("audio", audioMediaId, newReport._id);
+    if (photoMediaId) await store.linkMediaToReport("photos", photoMediaId, newReport._id);
+    if (audioMediaId) await store.linkMediaToReport("audio", audioMediaId, newReport._id);
 
     const targetUsers = await getResponsibleUsers(draft.tsekh);
     const targetPhones = targetUsers.map((u) => u.phone);
@@ -668,37 +530,52 @@ app.post("/api/confirm", async (req, res) => {
     
     if (shouldSendSms) {
       smsStatus = await sendSmsAlerts(targetPhones, newReport.tsekh, newReport.severity, HAZARD_TYPE_MN[newReport.type] || newReport.type);
-      newReport.alerted = smsStatus.sent.length > 0;
-      newReport.smsNumbers = smsStatus.sent;
-      newReport.smsFailed = smsStatus.failed;
-      await newReport.save();
+      newReport = (await store.updateReport(newReport._id, {
+        alerted: smsStatus.sent.length > 0,
+        smsNumbers: smsStatus.sent,
+        smsFailed: smsStatus.failed,
+      })) || { ...newReport, alerted: smsStatus.sent.length > 0 };
     }
 
     await createNotifications(targetUsers, newReport._id, newReport.tsekh, newReport.severity, HAZARD_TYPE_MN[newReport.type] || newReport.type);
     drafts.delete(draftId);
 
-    res.json({ success: true, reportId: newReport._id, smsSent: newReport.alerted, smsAttempted: shouldSendSms, smsDetails: smsStatus });  } catch (err) {
+    res.json({ success: true, reportId: newReport._id, smsSent: newReport.alerted, smsAttempted: shouldSendSms, smsDetails: smsStatus, storage: store.status().mode });
+  } catch (err) {
     console.error("Error in /api/confirm:", err);
     res.status(500).json({ error: "Баталгаажуулахад алдаа гарлаа." });
   }
 });
 
+// Хүсэлт гаргагчийн эрхээс хамааран тайлангийн шүүлтүүр үүсгэнэ.
+// requesterId (эсвэл хуучин апп-ын reporterEmployeeId) хүлээн авна.
+async function reportFilterFor(req, res) {
+  const requesterId = req.query.requesterId || req.query.reporterEmployeeId;
+  if (!requesterId) {
+    res.status(400).json({ error: "requesterId шаардлагатай." });
+    return null;
+  }
+  const user = await store.findUserByEmployeeId(requesterId);
+  if (!user) {
+    res.status(404).json({ error: "Хэрэглэгч олдсонгүй." });
+    return null;
+  }
+  const filter = {};
+  if (user.role === "tsekh_darga") filter.tsekh = user.tsekh;
+  else if (user.role === "ажилтан") filter.reporterEmployeeId = user.employeeId;
+  if (req.query.includeTestData !== "true") filter.isTestData = { $ne: true };
+  return filter;
+}
+
 // GET /api/history — Түүх харах
 app.get("/api/history", async (req, res) => {
   try {
-    const { requesterId } = req.query;
-    if (!requesterId) return res.status(400).json({ error: "requesterId шаардлагатай." });
-
-    const user = await User.findOne({ employeeId: requesterId });
-    if (!user) return res.status(404).json({ error: "Хэрэглэгч олдсонгүй." });
-
-    let query = {};
-    if (user.role === "tsekh_darga") query.tsekh = user.tsekh;
-    else if (user.role === "ажилтан") query.reporterEmployeeId = user.employeeId;
-
-    const reports = await Report.find(query).sort({ createdAt: -1 }).limit(100);
-    res.json(reports);
+    const filter = await reportFilterFor(req, res);
+    if (!filter) return;
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    res.json(await store.findReports(filter, limit));
   } catch (err) {
+    console.error("Error in /api/history:", err);
     res.status(500).json({ error: "Түүх ачаалахад алдаа гарлаа." });
   }
 });
@@ -706,33 +583,11 @@ app.get("/api/history", async (req, res) => {
 // GET /api/stats — Дашбордын тоо
 app.get("/api/stats", async (req, res) => {
   try {
-    const { requesterId } = req.query;
-    if (!requesterId) return res.status(400).json({ error: "requesterId шаардлагатай." });
-
-    const user = await User.findOne({ employeeId: requesterId });
-    if (!user) return res.status(404).json({ error: "Хэрэглэгч олдсонгүй." });
-
-    let matchStage = {};
-    if (user.role === "tsekh_darga") matchStage.tsekh = user.tsekh;
-    else if (user.role === "ажилтан") matchStage.reporterEmployeeId = user.employeeId;
-
-    const stats = await Report.aggregate([
-      { $match: matchStage },
-      {
-        $group: {
-          _id: null,
-          totalReports: { $sum: 1 },
-          criticalCount: { $sum: { $cond: [{ $eq: ["$severity", "critical"] }, 1, 0] } },
-          highCount: { $sum: { $cond: [{ $eq: ["$severity", "high"] }, 1, 0] } },
-          mediumCount: { $sum: { $cond: [{ $eq: ["$severity", "medium"] }, 1, 0] } },
-          lowCount: { $sum: { $cond: [{ $eq: ["$severity", "low"] }, 1, 0] } },
-        }
-      }
-    ]);
-
-    const defaultStats = { totalReports: 0, criticalCount: 0, highCount: 0, mediumCount: 0, lowCount: 0 };
-    res.json(stats[0] || defaultStats);
+    const filter = await reportFilterFor(req, res);
+    if (!filter) return;
+    res.json(await store.reportStats(filter));
   } catch (err) {
+    console.error("Error in /api/stats:", err);
     res.status(500).json({ error: "Статистик авахад алдаа гарлаа." });
   }
 });

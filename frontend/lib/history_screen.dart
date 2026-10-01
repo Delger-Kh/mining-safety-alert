@@ -85,6 +85,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
       final params = <String, String>{
         'limit': '100',
         'role': widget.currentUser.role,
+        // Backend uses this to decide which reports the user may see.
+        'requesterId': widget.currentUser.employeeId,
       };
 
       if (widget.currentUser.role == 'ажилтан') {

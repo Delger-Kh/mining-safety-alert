@@ -109,6 +109,10 @@ TWILIO_FROM_NUMBER=
 MONGO_URI=
 ```
 
+### Running without MongoDB
+
+MongoDB is optional. If it can't be reached at startup, or the connection drops later, the backend keeps running and saves users, reports, notifications, photos and audio to `backend/data/`. Every 30 seconds it tries to reconnect, and once it succeeds it copies everything saved locally into MongoDB automatically. Set `MONGO_URI=off` to always use local storage. `GET /api/health` tells you which mode is active (`"mongodb"` or `"local"`) and how many records are still waiting to sync.
+
 ---
 
 ##  API Endpoints

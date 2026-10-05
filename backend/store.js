@@ -336,7 +336,7 @@ async function createReport(data) {
 async function updateReport(id, set) {
   return run(
     async () => {
-      const r = plain(await Report.findByIdAndUpdate(id, { $set: set }, { new: true }).lean());
+      const r = plain(await Report.findByIdAndUpdate(id, { $set: set }, { returnDocument: "after" }).lean());
       if (r) cacheSafe(() => upsertLocal("reports", r, true));
       return r;
     },

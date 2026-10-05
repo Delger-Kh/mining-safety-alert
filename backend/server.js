@@ -72,12 +72,40 @@ const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_T
   ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
   : null;
 const TWILIO_FROM = process.env.TWILIO_FROM_NUMBER;
+// SMS_MODE=simulate → SMS бодитоор илгээхгүй, зөвхөн "илгээх байсан" гэж бүртгэнэ (Twilio-гүй туршилт/демо).
+const SMS_MODE = (process.env.SMS_MODE || "twilio").toLowerCase();
+if (SMS_MODE === "simulate") console.warn("[SMS] SMS_MODE=simulate — SMS will NOT really be sent (demo mode).");
 
 function buildAlertMessage(tsekh, severity, hazardType) {
   const severityLabel = { low: "бага", medium: "дунд", high: "өндөр", critical: "яаралтай" }[severity] || severity;
   const short = `АЮУЛ: ${tsekh}. ${hazardType}. Түвшин: ${severityLabel}.`;
   return short.length <= 70 ? short : short.slice(0, 67) + "...";
 }
+
+// Twilio зөвхөн олон улсын форматтай (+976XXXXXXXX) дугаар хүлээн авна.
+// "99112233", "976 9911 2233", "0097699112233" гэх мэтийг +97699112233 болгоно.
+function toE164(phone) {
+  if (!phone) return "";
+  let p = String(phone).replace(/[\s\-()]/g, "");
+  if (p.startsWith("00")) p = "+" + p.slice(2);
+  if (/^\d{8}$/.test(p)) return "+976" + p;          // Монгол 8 оронтой дугаар
+  if (/^976\d{8}$/.test(p)) return "+" + p;
+  return p.startsWith("+") ? p : "+" + p;
+}
+
+// Twilio-ийн түгээмэл алдааны кодыг ойлгомжтой тайлбар болгоно.
+const TWILIO_ERROR_HINTS = {
+  20003: "Twilio данс идэвхгүй эсвэл SID/Auth Token буруу байна.",
+  21211: "Хүлээн авагчийн дугаар буруу форматтай байна.",
+  21408: "Twilio дээр Монгол руу SMS илгээх зөвшөөрөл идэвхгүй байна (Messaging → Settings → Geo permissions → Mongolia).",
+  21608: "Twilio trial данс: энэ дугаарыг Twilio дээр Verified Caller ID болгож баталгаажуулах шаардлагатай.",
+  21606: "TWILIO_FROM_NUMBER дугаар SMS илгээх боломжгүй эсвэл таны дансных биш байна.",
+  21659: "TWILIO_FROM_NUMBER дугаар таны Twilio дансных биш байна.",
+  21612: "Энэ From дугаараас тухайн улс руу SMS илгээх боломжгүй.",
+};
+
+const TWILIO_TRIAL_TEMPLATE = process.env.TWILIO_TRIAL_TEMPLATE || "sms_internal_alerts";
+let twilioTrialMode = false;
 
 async function sendSmsAlerts(numbers, tsekh, severity, hazardType) {
   if (!numbers || numbers.length === 0) {
@@ -93,10 +121,25 @@ async function sendSmsAlerts(numbers, tsekh, severity, hazardType) {
   const sent = [];
   const failed = [];
 
+  // Twilio trial accounts can't send custom text (error 572006): they only
+  // accept a predefined template name as the body. When that happens we resend
+  // using the template. After you upgrade Twilio, the full message is sent.
   for (const to of numbers) {
     try {
-      const msg = await twilioClient.messages.create({ from: TWILIO_FROM, to, body: message });
-      console.log(`[SMS] ✅ Sent to ${to} — SID: ${msg.sid}`);
+      let msg;
+      if (!twilioTrialMode) {
+        try {
+          msg = await twilioClient.messages.create({ from: TWILIO_FROM, to, body: message });
+        } catch (err) {
+          if (err.code !== 572006) throw err;
+          twilioTrialMode = true;
+          console.warn(`[SMS] Twilio trial account: custom text not allowed, using template "${TWILIO_TRIAL_TEMPLATE}".`);
+        }
+      }
+      if (!msg) {
+        msg = await twilioClient.messages.create({ from: TWILIO_FROM, to, body: TWILIO_TRIAL_TEMPLATE });
+      }
+      console.log(`[SMS] ✅ Sent to ${to}${twilioTrialMode ? " (trial template)" : ""} — SID: ${msg.sid}`);
       sent.push(to);
     } catch (err) {
       console.error(`[SMS] ❌ Failed to send to ${to} — code: ${err.code}, message: ${err.message}`);
@@ -266,6 +309,21 @@ function mergeClassifications(imageResult, voiceResult, transcript) {
   return applyKeywordFloor(merged, transcript);
 }
 
+// Апп файлын төрлийг ихэвчлэн "application/octet-stream" гэж илгээдэг тул
+// файлын эхний байтуудаас жинхэнэ зургийн төрлийг тогтооно.
+function detectImageMime(buf) {
+  if (!buf || buf.length < 12) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (buf.toString("ascii", 0, 4) === "RIFF" && buf.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+  if (buf.toString("ascii", 0, 3) === "GIF") return "image/gif";
+  if (buf.toString("ascii", 4, 8) === "ftyp") {
+    const brand = buf.toString("ascii", 8, 12);
+    if (/^(heic|heix|hevc|mif1|msf1)$/.test(brand)) return "image/heic";
+  }
+  return null;
+}
+
 async function classifyImageOnly(photoFile, schemaProps) {
   const base64Image = photoFile.buffer.toString("base64");
   const promptText = `${SYSTEM_PROMPT}\n\nЗөвхөн зургийг үндэслэн дүгнэлт гарга. JSON-оор хариул:\n${JSON.stringify(schemaProps)}`;
@@ -423,6 +481,7 @@ app.post("/api/transcribe-chunk", chunkUpload, handleUploadError, async (req, re
 app.post("/api/classify", upload, handleUploadError, async (req, res) => {
   try {
     const photoFile = req.files?.["photo"]?.[0];
+    if (photoFile) photoFile.mimetype = detectImageMime(photoFile.buffer) || photoFile.mimetype;
     const audioFile = req.files?.["audio"]?.[0];
     const tsekh = req.body?.tsekh || "";
     const providedTranscript = req.body?.transcript || "";
@@ -451,13 +510,45 @@ app.post("/api/classify", upload, handleUploadError, async (req, res) => {
       confidence: { type: "number" },
     };
 
+    // Зураг болон дуу/бичвэрийг тус тусад нь шинжилнэ. Нэг нь алдаа гарвал нөгөөгөөр үргэлжилнэ.
+    const errors = [];
+    const MAX_GROQ_IMAGE_BYTES = 3 * 1024 * 1024; // base64 болоход ~4MB — Groq-ийн хязгаар
+
+    const imageTask = !photoFile ? null
+      : photoFile.size > MAX_GROQ_IMAGE_BYTES
+        ? Promise.reject(new Error(`Photo too large for AI (${(photoFile.size / 1048576).toFixed(1)}MB, max 3MB)`))
+        : classifyImageOnly(photoFile, schemaProps);
+    const voiceTask = transcript ? classifyVoiceOnly(transcript, schemaProps) : null;
+
+    const [imageOutcome, voiceOutcome] = await Promise.allSettled([imageTask, voiceTask]);
+
     let imageResult = null;
     let voiceResult = null;
+    if (photoFile) {
+      if (imageOutcome.status === "fulfilled") imageResult = imageOutcome.value;
+      else { errors.push(`image: ${imageOutcome.reason?.message}`); console.error("[AI] Image classification failed:", imageOutcome.reason?.message); }
+    }
+    if (transcript) {
+      if (voiceOutcome.status === "fulfilled") voiceResult = voiceOutcome.value;
+      else { errors.push(`text: ${voiceOutcome.reason?.message}`); console.error("[AI] Text classification failed:", voiceOutcome.reason?.message); }
+    }
 
-    if (photoFile) imageResult = await classifyImageOnly(photoFile, schemaProps);
-    if (transcript) voiceResult = await classifyVoiceOnly(transcript, schemaProps);
+    if (!imageResult && !voiceResult) {
+      const tooBig = photoFile && photoFile.size > MAX_GROQ_IMAGE_BYTES;
+      return res.status(502).json({
+        error: tooBig
+          ? "Зураг хэт том байна (3MB-аас бага байх ёстой). Дахин зураг аваад оролдоно уу."
+          : "AI шинжилгээ хийж чадсангүй. Дахин оролдоно уу.",
+        details: errors,
+      });
+    }
+
+    if (imageResult) console.log(`[AI] Photo → ${imageResult.is_hazard ? "hazard" : "safe"}, ${imageResult.type}, ${imageResult.severity}, conf ${imageResult.confidence}`);
+    if (voiceResult) console.log(`[AI] Text  → ${voiceResult.is_hazard ? "hazard" : "safe"}, ${voiceResult.type}, ${voiceResult.severity}, conf ${voiceResult.confidence}`);
 
     const result = mergeClassifications(imageResult, voiceResult, transcript);
+    if (errors.length) result.partialErrors = errors;
+    console.log(`[AI] Result → ${result.type}, ${result.severity}`);
 
     const draftId = saveDraft({
       photo: photoFile ? { buffer: photoFile.buffer, originalname: photoFile.originalname, mimetype: photoFile.mimetype } : null,
@@ -540,7 +631,17 @@ app.post("/api/confirm", async (req, res) => {
     await createNotifications(targetUsers, newReport._id, newReport.tsekh, newReport.severity, HAZARD_TYPE_MN[newReport.type] || newReport.type);
     drafts.delete(draftId);
 
-    res.json({ success: true, reportId: newReport._id, smsSent: newReport.alerted, smsAttempted: shouldSendSms, smsDetails: smsStatus, storage: store.status().mode });
+    res.json({
+      success: true,
+      reportId: newReport._id,
+      severity: newReport.severity,
+      smsSent: newReport.alerted,
+      smsAttempted: shouldSendSms,
+      smsSimulated: (smsStatus.simulated || []).length > 0,
+      smsDetails: smsStatus,
+      notifiedCount: targetUsers.filter((u) => u.phone).length,
+      storage: store.status().mode,
+    });
   } catch (err) {
     console.error("Error in /api/confirm:", err);
     res.status(500).json({ error: "Баталгаажуулахад алдаа гарлаа." });

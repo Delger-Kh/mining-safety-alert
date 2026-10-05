@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
@@ -12,6 +13,7 @@ import 'history_screen.dart';
 import 'app_user.dart';
 import 'login_screen.dart';
 import 'notifications_screen.dart';
+import 'config.dart';
 
 void main() {
   runApp(const MyApp());
@@ -166,9 +168,12 @@ class HazardReportPage extends StatefulWidget {
 }
 
 class _HazardReportPageState extends State<HazardReportPage> {
-  static const String backendBase = 'http://192.168.1.73:3000'; // CHANGE to your laptop's IP
+  // Серверийн хаягийг зөвхөн lib/config.dart дотор өөрчилнө.
+  static const String backendBase = kBackendBase;
 
-  File? _selectedImage;
+  // XFile + bytes works on phone AND in the browser (Chrome) — dart:io File does not work on web.
+  XFile? _selectedImage;
+  Uint8List? _selectedImageBytes;
   final ImagePicker _picker = ImagePicker();
   final AudioRecorder _recorder = AudioRecorder();
 
@@ -250,16 +255,18 @@ class _HazardReportPageState extends State<HazardReportPage> {
   }
 
   Future<void> _takePhoto() async {
-    final XFile? photo = await _picker.pickImage(source: ImageSource.camera, imageQuality: 85);
+    final XFile? photo = await _picker.pickImage(source: ImageSource.camera, imageQuality: 80, maxWidth: 1600, maxHeight: 1600);
     if (photo != null) {
-      setState(() { _selectedImage = File(photo.path); _errorMessage = null; });
+      final bytes = await photo.readAsBytes();
+      setState(() { _selectedImage = photo; _selectedImageBytes = bytes; _errorMessage = null; });
     }
   }
 
   Future<void> _pickFromGallery() async {
-    final XFile? photo = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    final XFile? photo = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 80, maxWidth: 1600, maxHeight: 1600);
     if (photo != null) {
-      setState(() { _selectedImage = File(photo.path); _errorMessage = null; });
+      final bytes = await photo.readAsBytes();
+      setState(() { _selectedImage = photo; _selectedImageBytes = bytes; _errorMessage = null; });
     }
   }
 
@@ -441,8 +448,12 @@ class _HazardReportPageState extends State<HazardReportPage> {
       request.fields['reporterName'] = widget.currentUser.name;
       request.fields['reporterEmployeeId'] = widget.currentUser.employeeId;
 
-      if (_selectedImage != null) {
-        request.files.add(await http.MultipartFile.fromPath('photo', _selectedImage!.path));
+      if (_selectedImageBytes != null) {
+        final name = _selectedImage?.name ?? '';
+        request.files.add(http.MultipartFile.fromBytes(
+          'photo', _selectedImageBytes!,
+          filename: name.isNotEmpty ? name : 'photo.jpg',
+        ));
       }
 
       // ── This is the piece that was missing: actually attach the
@@ -474,6 +485,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
           await _deleteFileQuietly(_finalAudioPath);
           setState(() {
             _selectedImage = null;
+            _selectedImageBytes = null;
             _transcriptController.clear();
             _finalAudioPath = null;
             _selectedTsekh = null;
@@ -492,7 +504,7 @@ class _HazardReportPageState extends State<HazardReportPage> {
   @override
   Widget build(BuildContext context) {
     final hasVoice = _transcriptController.text.trim().isNotEmpty;
-    final canSubmit = (_selectedImage != null || hasVoice) && !_isSubmitting && !_isRecording && !_isMergingAudio;
+    final canSubmit = (_selectedImageBytes != null || hasVoice) && !_isSubmitting && !_isRecording && !_isMergingAudio;
 
     return Scaffold(
       appBar: AppBar(
@@ -592,13 +604,13 @@ class _HazardReportPageState extends State<HazardReportPage> {
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: Colors.grey[400]!),
               ),
-              child: _selectedImage == null
+              child: _selectedImageBytes == null
                   ? const Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
                       Icon(Icons.photo_camera_outlined, size: 48, color: Colors.grey),
                       SizedBox(height: 8),
                       Text('Зураг сонгогдоогүй', style: TextStyle(color: Colors.grey)),
                     ]))
-                  : ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.file(_selectedImage!, fit: BoxFit.cover)),
+                  : ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.memory(_selectedImageBytes!, fit: BoxFit.cover)),
             ),
             const SizedBox(height: 10),
             Row(children: [
@@ -681,9 +693,12 @@ class _HazardReportPageState extends State<HazardReportPage> {
 
             Row(children: [
               Expanded(child: ElevatedButton.icon(
-                onPressed: (_isSubmitting || _isMergingAudio) ? null : (_isRecording ? _stopRecording : _startRecording),
+                // Voice recording uses phone audio files, so it is turned off in the browser.
+                onPressed: (kIsWeb || _isSubmitting || _isMergingAudio) ? null : (_isRecording ? _stopRecording : _startRecording),
                 icon: Icon(_isRecording ? Icons.stop : Icons.mic),
-                label: Text(_isRecording ? 'Зогсоох' : 'Яриа бичиж эхлэх'),
+                label: Text(kIsWeb
+                    ? 'Дуу бичлэг зөвхөн утсан дээр'
+                    : (_isRecording ? 'Зогсоох' : 'Яриа бичиж эхлэх')),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _isRecording ? Colors.red : null,
                   foregroundColor: _isRecording ? Colors.white : null,
@@ -772,6 +787,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
           'type': _selectedType,
           'severity': _selectedSeverity,
           'reasoning': _reasoningController.text.trim(),
+          'wasEdited': _wasEdited,
         }),
       ).timeout(const Duration(seconds: 30));
 
@@ -781,20 +797,48 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
         final alerted = result['smsSent'] == true;
         final attempted = result['smsAttempted'] == true;
-        final smsCount = ((result['smsDetails']?['sent']) as List?)?.length ?? 0;
+        final simulated = result['smsSimulated'] == true;
+        final details = (result['smsDetails'] as Map?) ?? {};
+        final sentTo = ((details['sent'] as List?) ?? []).cast<dynamic>();
+        final simulatedTo = ((details['simulated'] as List?) ?? []).cast<dynamic>();
+        final smsError = ((details['errors'] as List?) ?? [])
+            .map((e) => '${e['to'] ?? ''} ${e['message'] ?? ''}'.trim())
+            .join('\n');
+        final notified = (result['notifiedCount'] as num?)?.toInt() ?? 0;
+        final severity = (result['severity'] as String?) ?? _selectedSeverity;
+        final levelText = {
+          'low': 'Бага', 'medium': 'Дунд', 'high': 'Өндөр', 'critical': 'Шууд аюултай',
+        }[severity] ?? severity;
+        final appNote = notified > 0 ? '\n\nАппын мэдэгдэл $notified хүнд илгээгдлээ.' : '';
+
+        // 4 өөр үр дүн: илгээсэн / туршилт / илгээж чадаагүй / шаардлагагүй
+        late final IconData icon;
+        late final Color color;
+        late final String title;
+        late final String body;
+        if (alerted) {
+          icon = Icons.check_circle; color = Colors.green; title = 'SMS илгээгдлээ';
+          body = 'Түвшин: $levelText\n\n${sentTo.length} хүнд SMS илгээгдлээ:\n${sentTo.join('\n')}$appNote';
+        } else if (simulated) {
+          icon = Icons.science_outlined; color = Colors.deepPurple; title = 'SMS (туршилт)';
+          body = 'Түвшин: $levelText\n\nТуршилтын горим: бодит SMS явуулаагүй. Дараах дугаарууд руу SMS илгээгдэх байсан:\n${simulatedTo.join('\n')}$appNote';
+        } else if (attempted) {
+          icon = Icons.error_outline; color = Colors.red; title = 'SMS илгээгдсэнгүй';
+          body = 'Түвшин: $levelText — SMS илгээх ёстой байсан ч амжилтгүй боллоо.\n\n$smsError$appNote';
+        } else {
+          icon = Icons.info_outline; color = Colors.blueGrey; title = 'Хадгалагдсан';
+          body = 'Түвшин: $levelText\n\nБага/дунд түвшин тул SMS шаардлагагүй.$appNote';
+        }
 
         await showDialog(
           context: context,
           builder: (_) => AlertDialog(
             title: Row(children: [
-              Icon(alerted ? Icons.check_circle : Icons.info_outline,
-                  color: alerted ? Colors.green : Colors.blueGrey),
+              Icon(icon, color: color),
               const SizedBox(width: 8),
-              Text(alerted ? 'Илгээгдсэн' : 'Хадгалагдсан'),
+              Flexible(child: Text(title)),
             ]),
-            content: Text(alerted
-                ? 'Мэдэгдэл баталгаажиж, $smsCount хүнд SMS илгээгдлээ.'
-                : 'Мэдээлэл хадгалагдсан. Аюулын түвшин бага тул SMS илгээгдээгүй.'),
+            content: Text(body),
             actions: [
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
             ],
